@@ -1,7 +1,8 @@
 // functions/_shared/db.js
 import { hashPw } from './auth.js';
 
-const DEFAULT_SETTINGS = {
+// ─── Default settings ────────────────────────────────────────────────────────
+export const DEFAULT_SETTINGS = {
   BOT_TOKEN: '',
   FORUM_GROUP_ID: '',
   ADMIN_IDS: '',
@@ -11,9 +12,16 @@ const DEFAULT_SETTINGS = {
   AUTO_UNBLOCK_ENABLED: 'true',
   MAX_MESSAGES_PER_MINUTE: '30',
   WEBHOOK_SECRET: '',
+  CAPTCHA_TYPE: 'math',                // math | image_numeric | image_alphanumeric
+  CAPTCHA_SITE_URL: '',
+  WELCOME_ENABLED: 'true',
+  WELCOME_MESSAGE: '👋 欢迎使用双向消息机器人！\n\n请直接发送您的问题或留言，管理员将尽快回复。\n\n发送 /help 查看帮助。',
+  BOT_COMMAND_FILTER: 'true',
+  WHITELIST_ENABLED: 'false',
+  ACTIVE_DB: 'kv',                     // kv | d1
 };
 
-// ── KV helper: fetch ALL keys for a prefix, handling CF pagination cursor ──
+// ─── KV helpers ───────────────────────────────────────────────────────────────
 async function kvListAll(kv, prefix) {
   const keys = [];
   let cursor;
@@ -27,512 +35,498 @@ async function kvListAll(kv, prefix) {
   return keys;
 }
 
-export class DB {
-  constructor(kv) {
-    this.kv = kv;
-  }
+// ─── KV Store ────────────────────────────────────────────────────────────────
+class KVStore {
+  constructor(kv) { this.kv = kv; }
 
-  // ========== Settings ==========
-
-  async getSetting(key) {
-    try {
-      return await this.kv.get(`setting:${key}`);
-    } catch (e) {
-      console.error(`getSetting error for ${key}:`, e);
-      return null;
-    }
-  }
-
-  async setSetting(key, value) {
-    try {
-      await this.kv.put(`setting:${key}`, String(value));
-    } catch (e) {
-      console.error(`setSetting error for ${key}:`, e);
-    }
-  }
-
+  // Settings
+  async getSetting(key) { return this.kv.get(`setting:${key}`); }
+  async setSetting(key, value) { await this.kv.put(`setting:${key}`, String(value)); }
   async getAllSettings() {
-    try {
-      const settings = { ...DEFAULT_SETTINGS };
-      // Batch: fetch all setting keys in parallel
-      const entries = await Promise.all(
-        Object.keys(DEFAULT_SETTINGS).map(async key => {
-          const val = await this.kv.get(`setting:${key}`);
-          return [key, val];
-        }),
-      );
-      for (const [key, val] of entries) {
-        if (val !== null) settings[key] = val;
-      }
-      return settings;
-    } catch (e) {
-      console.error('getAllSettings error:', e);
-      return { ...DEFAULT_SETTINGS };
-    }
+    const s = { ...DEFAULT_SETTINGS };
+    await Promise.all(Object.keys(s).map(async k => {
+      const v = await this.kv.get(`setting:${k}`);
+      if (v !== null) s[k] = v;
+    }));
+    return s;
   }
 
-  // ========== Users ==========
-
+  // Users
   async getUser(userId) {
-    try {
-      const data = await this.kv.get(`user:${userId}`);
-      return data ? JSON.parse(data) : null;
-    } catch (e) {
-      console.error('getUser error:', e);
-      return null;
-    }
+    const d = await this.kv.get(`user:${userId}`);
+    return d ? JSON.parse(d) : null;
   }
-
-  async upsertUser({ userId, username, firstName, lastName, languageCode }) {
-    try {
-      const existing = await this.getUser(userId);
-      const user = {
-        user_id: userId,
-        username: username || existing?.username,
-        first_name: firstName || existing?.first_name,
-        last_name: lastName || existing?.last_name,
-        language_code: languageCode || existing?.language_code,
-        thread_id: existing?.thread_id,
-        is_verified: existing?.is_verified || 0,
-        is_blocked: existing?.is_blocked || 0,
-        is_permanent_block: existing?.is_permanent_block || 0,
-        block_reason: existing?.block_reason,
-        blocked_by: existing?.blocked_by,
-        created_at: existing?.created_at || new Date().toISOString(),
-      };
-      await this.kv.put(`user:${userId}`, JSON.stringify(user));
-      if (username) {
-        await this.kv.put(`username:${username.toLowerCase()}`, String(userId));
-      }
-    } catch (e) {
-      console.error('upsertUser error:', e);
-    }
+  async upsertUser(u) {
+    const ex = await this.getUser(u.user_id);
+    const rec = { ...ex, ...u, created_at: ex?.created_at || new Date().toISOString() };
+    await this.kv.put(`user:${u.user_id}`, JSON.stringify(rec));
+    if (u.username) await this.kv.put(`username:${u.username.toLowerCase()}`, String(u.user_id));
   }
-
   async setUserThread(userId, threadId) {
-    try {
-      const user = await this.getUser(userId);
-      if (user) {
-        user.thread_id = threadId;
-        await this.kv.put(`user:${userId}`, JSON.stringify(user));
-        // FIX: maintain reverse index for O(1) lookup in getUserByThread
-        await this.kv.put(`thread:${threadId}`, String(userId));
-      }
-    } catch (e) {
-      console.error('setUserThread error:', e);
-    }
+    const u = await this.getUser(userId);
+    if (u) { u.thread_id = threadId; await this.kv.put(`user:${userId}`, JSON.stringify(u)); }
+    await this.kv.put(`thread:${threadId}`, String(userId));
   }
-
-  async setUserVerified(userId, verified) {
-    try {
-      const user = await this.getUser(userId);
-      if (user) {
-        user.is_verified = verified ? 1 : 0;
-        await this.kv.put(`user:${userId}`, JSON.stringify(user));
-      }
-    } catch (e) {
-      console.error('setUserVerified error:', e);
-    }
-  }
-
-  /**
-   * FIX: was O(n) full scan of all users.
-   * Now O(1) via the thread:{threadId} → userId reverse index written in setUserThread.
-   */
   async getUserByThread(threadId) {
-    try {
-      const userId = await this.kv.get(`thread:${threadId}`);
-      if (!userId) return null;
-      return this.getUser(parseInt(userId, 10));
-    } catch (e) {
-      console.error('getUserByThread error:', e);
-      return null;
+    const uid = await this.kv.get(`thread:${threadId}`);
+    return uid ? this.getUser(parseInt(uid, 10)) : null;
+  }
+  async setUserVerified(userId, v) {
+    const u = await this.getUser(userId);
+    if (u) { u.is_verified = v ? 1 : 0; await this.kv.put(`user:${userId}`, JSON.stringify(u)); }
+  }
+  async blockUser(userId, reason, blockedBy, permanent) {
+    const u = await this.getUser(userId);
+    if (u) {
+      Object.assign(u, { is_blocked: 1, is_permanent_block: permanent ? 1 : 0, block_reason: reason, blocked_by: blockedBy });
+      await this.kv.put(`user:${userId}`, JSON.stringify(u));
     }
   }
-
-  async blockUser(userId, reason, blockedBy, permanent = true) {
-    try {
-      const user = await this.getUser(userId);
-      if (user) {
-        user.is_blocked = 1;
-        user.is_permanent_block = permanent ? 1 : 0;
-        user.block_reason = reason;
-        user.blocked_by = blockedBy;
-        await this.kv.put(`user:${userId}`, JSON.stringify(user));
-      }
-    } catch (e) {
-      console.error('blockUser error:', e);
-    }
-  }
-
   async unblockUser(userId) {
-    try {
-      const user = await this.getUser(userId);
-      if (user) {
-        user.is_blocked = 0;
-        user.is_permanent_block = 0;
-        user.block_reason = null;
-        user.blocked_by = null;
-        await this.kv.put(`user:${userId}`, JSON.stringify(user));
-      }
-    } catch (e) {
-      console.error('unblockUser error:', e);
+    const u = await this.getUser(userId);
+    if (u) {
+      Object.assign(u, { is_blocked: 0, is_permanent_block: 0, block_reason: null, blocked_by: null });
+      await this.kv.put(`user:${userId}`, JSON.stringify(u));
     }
   }
-
+  async updateUsername(userId, newUsername) {
+    const u = await this.getUser(userId);
+    if (u) {
+      if (u.username) await this.kv.delete(`username:${u.username.toLowerCase()}`);
+      u.username = newUsername;
+      await this.kv.put(`user:${userId}`, JSON.stringify(u));
+      if (newUsername) await this.kv.put(`username:${newUsername.toLowerCase()}`, String(userId));
+    }
+  }
   async searchUsers(query, limit = 10) {
-    try {
-      const results = [];
-      const keys = await kvListAll(this.kv, 'user:');
-      const q = query.toLowerCase();
-      for (const key of keys) {
-        if (results.length >= limit) break;
-        const data = await this.kv.get(key.name);
-        if (data) {
-          const user = JSON.parse(data);
-          if (
-            String(user.user_id).includes(q) ||
-            (user.username && user.username.toLowerCase().includes(q)) ||
-            (user.first_name && user.first_name.toLowerCase().includes(q))
-          ) {
-            results.push(user);
-          }
-        }
-      }
-      return results;
-    } catch (e) {
-      console.error('searchUsers error:', e);
-      return [];
+    const results = [];
+    const q = query.toLowerCase();
+    for (const key of await kvListAll(this.kv, 'user:')) {
+      if (results.length >= limit) break;
+      const d = await this.kv.get(key.name);
+      if (!d) continue;
+      const u = JSON.parse(d);
+      if (String(u.user_id).includes(q) || (u.username?.toLowerCase().includes(q)) || (u.first_name?.toLowerCase().includes(q)))
+        results.push(u);
     }
+    return results;
   }
-
   async getAllUsers(page = 1, pageSize = 20) {
-    try {
-      const users = [];
-      const keys = await kvListAll(this.kv, 'user:');
-      await Promise.all(
-        keys.map(async key => {
-          const data = await this.kv.get(key.name);
-          if (data) users.push(JSON.parse(data));
-        }),
-      );
-      users.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      const start = (page - 1) * pageSize;
-      return { users: users.slice(start, start + pageSize), total: users.length };
-    } catch (e) {
-      console.error('getAllUsers error:', e);
-      return { users: [], total: 0 };
-    }
+    const all = (await Promise.all((await kvListAll(this.kv, 'user:')).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(Boolean);
+    all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    return { users: all.slice((page - 1) * pageSize, page * pageSize), total: all.length };
   }
-
   async getBlockedUsers(page = 1, pageSize = 10) {
-    try {
-      const users = [];
-      const keys = await kvListAll(this.kv, 'user:');
-      await Promise.all(
-        keys.map(async key => {
-          const data = await this.kv.get(key.name);
-          if (data) {
-            const user = JSON.parse(data);
-            if (user.is_blocked) users.push(user);
-          }
-        }),
-      );
-      users.sort((a, b) => b.user_id - a.user_id);
-      const start = (page - 1) * pageSize;
-      return { users: users.slice(start, start + pageSize), total: users.length };
-    } catch (e) {
-      console.error('getBlockedUsers error:', e);
-      return { users: [], total: 0 };
-    }
+    const all = (await Promise.all((await kvListAll(this.kv, 'user:')).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(u => u?.is_blocked);
+    const start = (page - 1) * pageSize;
+    return { users: all.slice(start, start + pageSize), total: all.length };
+  }
+  async getAllUsersRaw() {
+    return (await Promise.all((await kvListAll(this.kv, 'user:')).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(Boolean);
   }
 
-  // ========== Messages ==========
+  // Whitelist
+  async isWhitelisted(userId) { return !!(await this.kv.get(`whitelist:${userId}`)); }
+  async addToWhitelist(userId, reason, addedBy) {
+    await this.kv.put(`whitelist:${userId}`, JSON.stringify({ user_id: userId, reason, added_by: addedBy, created_at: new Date().toISOString() }));
+  }
+  async removeFromWhitelist(userId) { await this.kv.delete(`whitelist:${userId}`); }
+  async getWhitelist(page = 1, pageSize = 20) {
+    const entries = (await Promise.all((await kvListAll(this.kv, 'whitelist:')).map(async k => {
+      const d = await this.kv.get(k.name);
+      if (!d) return null;
+      const wl = JSON.parse(d);
+      const u  = await this.getUser(wl.user_id);
+      return { ...wl, ...(u || {}) };
+    }))).filter(Boolean);
+    entries.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    return { users: entries.slice((page - 1) * pageSize, page * pageSize), total: entries.length };
+  }
+  async getWhitelistRaw() {
+    return (await Promise.all((await kvListAll(this.kv, 'whitelist:')).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(Boolean);
+  }
 
+  // Messages
   async addMsg({ userId, direction, content, messageType = 'text', telegramMessageId }) {
-    try {
-      const msgId = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-      const message = {
-        id: msgId,
-        user_id: userId,
-        direction,
-        content: content || '',
-        message_type: messageType,
-        telegram_message_id: telegramMessageId,
-        created_at: new Date().toISOString(),
-      };
-      await this.kv.put(`msg:${userId}:${msgId}`, JSON.stringify(message));
-      await this.kv.put(
-        `recent:${userId}`,
-        JSON.stringify({
-          user_id: userId,
-          last_message: content,
-          last_direction: direction,
-          last_at: message.created_at,
-        }),
-      );
-    } catch (e) {
-      console.error('addMsg error:', e);
-    }
+    const id  = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const msg = { id, user_id: userId, direction, content: content || '', message_type: messageType, telegram_message_id: telegramMessageId, created_at: new Date().toISOString() };
+    await this.kv.put(`msg:${userId}:${id}`, JSON.stringify(msg));
+    await this.kv.put(`recent:${userId}`, JSON.stringify({ user_id: userId, last_message: content, last_direction: direction, last_at: msg.created_at }));
   }
-
   async getMsgs(userId, limit = 50, offset = 0) {
-    try {
-      const messages = [];
-      const keys = await kvListAll(this.kv, `msg:${userId}:`);
-      await Promise.all(
-        keys.map(async key => {
-          const data = await this.kv.get(key.name);
-          if (data) messages.push(JSON.parse(data));
-        }),
-      );
-      messages.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-      return messages.slice(offset, offset + limit);
-    } catch (e) {
-      console.error('getMsgs error:', e);
-      return [];
-    }
+    const msgs = (await Promise.all((await kvListAll(this.kv, `msg:${userId}:`)).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(Boolean);
+    msgs.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    return msgs.slice(offset, offset + limit);
   }
-
   async getRecentConvs(limit = 40) {
-    try {
-      const convs = [];
-      const keys = await kvListAll(this.kv, 'recent:');
-      await Promise.all(
-        keys.map(async key => {
-          const data = await this.kv.get(key.name);
-          if (data) {
-            const conv = JSON.parse(data);
-            const user = await this.getUser(conv.user_id);
-            convs.push({ ...conv, ...user });
-          }
-        }),
-      );
-      convs.sort((a, b) => new Date(b.last_at) - new Date(a.last_at));
-      return convs.slice(0, limit);
-    } catch (e) {
-      console.error('getRecentConvs error:', e);
-      return [];
-    }
+    const convs = (await Promise.all((await kvListAll(this.kv, 'recent:')).map(async k => {
+      const d = await this.kv.get(k.name);
+      if (!d) return null;
+      const c = JSON.parse(d);
+      const u = await this.getUser(c.user_id);
+      return { ...c, ...(u || {}) };
+    }))).filter(Boolean);
+    convs.sort((a, b) => new Date(b.last_at) - new Date(a.last_at));
+    return convs.slice(0, limit);
+  }
+  async getAllMsgsRaw() {
+    return (await Promise.all((await kvListAll(this.kv, 'msg:')).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(Boolean);
+  }
+  async getAllRecentRaw() {
+    return (await Promise.all((await kvListAll(this.kv, 'recent:')).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(Boolean);
   }
 
-  // ========== Verification ==========
-
-  async setVerify(userId, question, answer, ttlSeconds = 300) {
-    try {
-      const data = {
-        user_id: userId,
-        question,
-        answer,
-        attempts: 0,
-        expires_at: Date.now() + ttlSeconds * 1000,
-      };
-      await this.kv.put(`verify:${userId}`, JSON.stringify(data), {
-        expirationTtl: ttlSeconds,
-      });
-    } catch (e) {
-      console.error('setVerify error:', e);
-    }
+  // Verification
+  async setVerify(userId, data, ttlSeconds = 300) {
+    const rec = { user_id: userId, attempts: 0, expires_at: Date.now() + ttlSeconds * 1000, ...data };
+    await this.kv.put(`verify:${userId}`, JSON.stringify(rec), { expirationTtl: ttlSeconds });
   }
-
-  async getVerify(userId) {
-    try {
-      const data = await this.kv.get(`verify:${userId}`);
-      return data ? JSON.parse(data) : null;
-    } catch (e) {
-      console.error('getVerify error:', e);
-      return null;
-    }
-  }
-
+  async getVerify(userId) { const d = await this.kv.get(`verify:${userId}`); return d ? JSON.parse(d) : null; }
   async incVerify(userId) {
-    try {
-      const v = await this.getVerify(userId);
-      if (v) {
-        v.attempts++;
-        // FIX: CF KV rejects expirationTtl < 60; clamp to minimum 60s
-        const remainingMs = v.expires_at - Date.now();
-        const ttl = Math.max(60, Math.floor(remainingMs / 1000));
-        await this.kv.put(`verify:${userId}`, JSON.stringify(v), {
-          expirationTtl: ttl,
-        });
-      }
-    } catch (e) {
-      console.error('incVerify error:', e);
+    const v = await this.getVerify(userId);
+    if (v) {
+      v.attempts++;
+      const ttl = Math.max(60, Math.floor((v.expires_at - Date.now()) / 1000));
+      await this.kv.put(`verify:${userId}`, JSON.stringify(v), { expirationTtl: ttl });
     }
   }
+  async delVerify(userId) { await this.kv.delete(`verify:${userId}`).catch(() => {}); }
 
-  async delVerify(userId) {
-    try {
-      await this.kv.delete(`verify:${userId}`);
-    } catch (e) {
-      console.error('delVerify error:', e);
-    }
-  }
-
-  // ========== Web Users (Admin) ==========
-
-  async webUserCount() {
-    try {
-      const keys = await kvListAll(this.kv, 'webuser:');
-      return keys.length;
-    } catch (e) {
-      console.error('webUserCount error:', e);
-      return 0;
-    }
-  }
-
-  async createWebUser(username, passwordHash) {
-    try {
-      const id = `${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
-      const user = {
-        id,
-        username,
-        password_hash: passwordHash,
-        totp_secret: null,
-        totp_enabled: 0,
-        is_admin: 1,
-        created_at: new Date().toISOString(),
-      };
-      await this.kv.put(`webuser:${username.toLowerCase()}`, JSON.stringify(user));
-      await this.kv.put(`webuser_id:${id}`, JSON.stringify(user));
-      return user;
-    } catch (e) {
-      console.error('createWebUser error:', e);
-      return null;
-    }
-  }
-
-  async getWebUser(username) {
-    try {
-      const data = await this.kv.get(`webuser:${username.toLowerCase()}`);
-      return data ? JSON.parse(data) : null;
-    } catch (e) {
-      console.error('getWebUser error:', e);
-      return null;
-    }
-  }
-
-  async getWebUserById(id) {
-    try {
-      const data = await this.kv.get(`webuser_id:${id}`);
-      return data ? JSON.parse(data) : null;
-    } catch (e) {
-      console.error('getWebUserById error:', e);
-      return null;
-    }
-  }
-
-  async updateWebUserPassword(id, hash) {
-    try {
-      const user = await this.getWebUserById(id);
-      if (user) {
-        user.password_hash = hash;
-        await this.kv.put(`webuser:${user.username.toLowerCase()}`, JSON.stringify(user));
-        await this.kv.put(`webuser_id:${id}`, JSON.stringify(user));
-      }
-    } catch (e) {
-      console.error('updateWebUserPassword error:', e);
-    }
-  }
-
-  /**
-   * FIX: this method was called by the API but did not exist in db.js, causing a 500 error.
-   */
-  async updateWebUserUsername(id, newUsername) {
-    try {
-      const user = await this.getWebUserById(id);
-      if (!user) return;
-      // Remove old username key
-      await this.kv.delete(`webuser:${user.username.toLowerCase()}`);
-      user.username = newUsername;
-      await this.kv.put(`webuser:${newUsername.toLowerCase()}`, JSON.stringify(user));
-      await this.kv.put(`webuser_id:${id}`, JSON.stringify(user));
-    } catch (e) {
-      console.error('updateWebUserUsername error:', e);
-    }
-  }
-
-  async setWebUserTotp(id, secret, enabled) {
-    try {
-      const user = await this.getWebUserById(id);
-      if (user) {
-        user.totp_secret = secret;
-        user.totp_enabled = enabled ? 1 : 0;
-        await this.kv.put(`webuser:${user.username.toLowerCase()}`, JSON.stringify(user));
-        await this.kv.put(`webuser_id:${id}`, JSON.stringify(user));
-      }
-    } catch (e) {
-      console.error('setWebUserTotp error:', e);
-    }
-  }
-
-  // ========== Stats ==========
-
+  // Stats
   async getStats() {
-    try {
-      const [userKeys, msgKeys] = await Promise.all([
-        kvListAll(this.kv, 'user:'),
-        kvListAll(this.kv, 'msg:'),
-      ]);
+    const [userKeys, msgKeys] = await Promise.all([kvListAll(this.kv, 'user:'), kvListAll(this.kv, 'msg:')]);
+    const userData = await Promise.all(userKeys.map(k => this.kv.get(k.name)));
+    const blockedCount = userData.reduce((n, d) => n + (d && JSON.parse(d).is_blocked ? 1 : 0), 0);
+    const today = new Date().toISOString().slice(0, 10);
+    let todayMsgs = 0;
+    for (const k of msgKeys) {
+      const ts = parseInt(k.name.split(':')[2]?.split('_')[0], 10);
+      if (!isNaN(ts) && new Date(ts).toISOString().slice(0, 10) === today) todayMsgs++;
+    }
+    return { totalUsers: userKeys.length, blockedUsers: blockedCount, totalMessages: msgKeys.length, todayMessages: todayMsgs };
+  }
 
-      // Count blocked users by fetching all user records in parallel
-      const userData = await Promise.all(
-        userKeys.map(k => this.kv.get(k.name)),
-      );
-      const blockedCount = userData.reduce((n, raw) => {
-        if (!raw) return n;
-        const u = JSON.parse(raw);
-        return n + (u.is_blocked ? 1 : 0);
-      }, 0);
+  // Web users
+  async webUserCount() { return (await kvListAll(this.kv, 'webuser:')).length; }
+  async createWebUser(username, passwordHash) {
+    const id   = `${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+    const user = { id, username, password_hash: passwordHash, totp_secret: null, totp_enabled: 0, is_admin: 1, created_at: new Date().toISOString() };
+    await this.kv.put(`webuser:${username.toLowerCase()}`, JSON.stringify(user));
+    await this.kv.put(`webuser_id:${id}`, JSON.stringify(user));
+    return user;
+  }
+  async getWebUser(username) { const d = await this.kv.get(`webuser:${username.toLowerCase()}`); return d ? JSON.parse(d) : null; }
+  async getWebUserById(id) { const d = await this.kv.get(`webuser_id:${id}`); return d ? JSON.parse(d) : null; }
+  async updateWebUserPassword(id, hash) {
+    const u = await this.getWebUserById(id);
+    if (u) { u.password_hash = hash; await this._saveWebUser(u); }
+  }
+  async updateWebUserUsername(id, newUsername) {
+    const u = await this.getWebUserById(id);
+    if (!u) return;
+    await this.kv.delete(`webuser:${u.username.toLowerCase()}`);
+    u.username = newUsername;
+    await this._saveWebUser(u);
+  }
+  async setWebUserTotp(id, secret, enabled) {
+    const u = await this.getWebUserById(id);
+    if (u) { u.totp_secret = secret; u.totp_enabled = enabled ? 1 : 0; await this._saveWebUser(u); }
+  }
+  async _saveWebUser(u) {
+    await this.kv.put(`webuser:${u.username.toLowerCase()}`, JSON.stringify(u));
+    await this.kv.put(`webuser_id:${u.id}`, JSON.stringify(u));
+  }
+  async getAllWebUsersRaw() {
+    return (await Promise.all((await kvListAll(this.kv, 'webuser_id:')).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(Boolean);
+  }
+}
 
-      // Count today's messages via KV metadata (key contains timestamp prefix)
-      const today = new Date().toISOString().slice(0, 10);
-      let todayMsgs = 0;
-      // Keys are msg:{userId}:{timestamp}_{rand} — check the key name directly
-      for (const k of msgKeys) {
-        // Extract timestamp segment from key: msg:userId:TS_rand
-        const parts = k.name.split(':');
-        if (parts.length >= 3) {
-          const ts = parseInt(parts[2].split('_')[0], 10);
-          if (!isNaN(ts)) {
-            const d = new Date(ts).toISOString().slice(0, 10);
-            if (d === today) todayMsgs++;
-          }
-        }
-      }
+// ─── D1 Store ────────────────────────────────────────────────────────────────
+const D1_SCHEMA = `
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users (
+  user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT,
+  language_code TEXT, thread_id INTEGER, is_verified INTEGER DEFAULT 0,
+  is_blocked INTEGER DEFAULT 0, is_permanent_block INTEGER DEFAULT 0,
+  block_reason TEXT, blocked_by TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS thread_map (thread_id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, direction TEXT,
+  content TEXT, message_type TEXT, telegram_message_id INTEGER, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS recent_convs (
+  user_id INTEGER PRIMARY KEY, last_message TEXT, last_direction TEXT, last_at TEXT
+);
+CREATE TABLE IF NOT EXISTS whitelist (
+  user_id INTEGER PRIMARY KEY, reason TEXT, added_by TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS web_users (
+  id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT,
+  totp_secret TEXT, totp_enabled INTEGER DEFAULT 0, is_admin INTEGER DEFAULT 1, created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+`;
 
-      return {
-        totalUsers: userKeys.length,
-        blockedUsers: blockedCount,
-        totalMessages: msgKeys.length,
-        todayMessages: todayMsgs,
-      };
-    } catch (e) {
-      console.error('getStats error:', e);
-      return { totalUsers: 0, blockedUsers: 0, totalMessages: 0, todayMessages: 0 };
+class D1Store {
+  constructor(d1) { this.d1 = d1; }
+
+  async exec(sql, ...params) {
+    const stmt = this.d1.prepare(sql);
+    return params.length ? stmt.bind(...params).run() : stmt.run();
+  }
+  async first(sql, ...params) {
+    const stmt = this.d1.prepare(sql);
+    return params.length ? stmt.bind(...params).first() : stmt.first();
+  }
+  async all(sql, ...params) {
+    const stmt = this.d1.prepare(sql);
+    const res  = await (params.length ? stmt.bind(...params).all() : stmt.all());
+    return res.results || [];
+  }
+
+  // Settings
+  async getSetting(key) { const r = await this.first('SELECT value FROM settings WHERE key=?', key); return r?.value ?? null; }
+  async setSetting(key, value) { await this.exec('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)', key, value); }
+  async getAllSettings() {
+    const rows = await this.all('SELECT key,value FROM settings');
+    const s    = { ...DEFAULT_SETTINGS };
+    for (const r of rows) s[r.key] = r.value;
+    return s;
+  }
+
+  // Users
+  async getUser(userId) { return this.first('SELECT * FROM users WHERE user_id=?', userId); }
+  async upsertUser(u) {
+    await this.exec(
+      `INSERT INTO users(user_id,username,first_name,last_name,language_code,thread_id,is_verified,is_blocked,is_permanent_block,block_reason,blocked_by,created_at)
+       VALUES(?,?,?,?,?,?,0,0,0,NULL,NULL,?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         username=COALESCE(excluded.username,username),
+         first_name=COALESCE(excluded.first_name,first_name),
+         last_name=COALESCE(excluded.last_name,last_name),
+         language_code=COALESCE(excluded.language_code,language_code)`,
+      u.user_id, u.username||null, u.first_name||null, u.last_name||null,
+      u.language_code||null, u.thread_id||null, u.created_at||new Date().toISOString()
+    );
+  }
+  async setUserThread(userId, threadId) {
+    await this.exec('UPDATE users SET thread_id=? WHERE user_id=?', threadId, userId);
+    await this.exec('INSERT OR REPLACE INTO thread_map(thread_id,user_id) VALUES(?,?)', threadId, userId);
+  }
+  async getUserByThread(threadId) {
+    const r = await this.first('SELECT user_id FROM thread_map WHERE thread_id=?', threadId);
+    return r ? this.getUser(r.user_id) : null;
+  }
+  async setUserVerified(userId, v) { await this.exec('UPDATE users SET is_verified=? WHERE user_id=?', v ? 1 : 0, userId); }
+  async blockUser(userId, reason, blockedBy, permanent) {
+    await this.exec('UPDATE users SET is_blocked=1,is_permanent_block=?,block_reason=?,blocked_by=? WHERE user_id=?', permanent ? 1 : 0, reason, blockedBy, userId);
+  }
+  async unblockUser(userId) {
+    await this.exec('UPDATE users SET is_blocked=0,is_permanent_block=0,block_reason=NULL,blocked_by=NULL WHERE user_id=?', userId);
+  }
+  async updateUsername(userId, newUsername) {
+    await this.exec('UPDATE users SET username=? WHERE user_id=?', newUsername, userId);
+  }
+  async searchUsers(query, limit = 10) {
+    const q = `%${query}%`;
+    return this.all('SELECT * FROM users WHERE CAST(user_id AS TEXT) LIKE ? OR username LIKE ? OR first_name LIKE ? LIMIT ?', q, q, q, limit);
+  }
+  async getAllUsers(page = 1, pageSize = 20) {
+    const offset = (page - 1) * pageSize;
+    const [users, countRow] = await Promise.all([
+      this.all('SELECT * FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?', pageSize, offset),
+      this.first('SELECT COUNT(*) as cnt FROM users'),
+    ]);
+    return { users, total: countRow?.cnt || 0 };
+  }
+  async getBlockedUsers(page = 1, pageSize = 10) {
+    const offset = (page - 1) * pageSize;
+    const [users, countRow] = await Promise.all([
+      this.all('SELECT * FROM users WHERE is_blocked=1 ORDER BY user_id DESC LIMIT ? OFFSET ?', pageSize, offset),
+      this.first('SELECT COUNT(*) as cnt FROM users WHERE is_blocked=1'),
+    ]);
+    return { users, total: countRow?.cnt || 0 };
+  }
+  async getAllUsersRaw() { return this.all('SELECT * FROM users'); }
+
+  // Whitelist
+  async isWhitelisted(userId) { return !!(await this.first('SELECT 1 FROM whitelist WHERE user_id=?', userId)); }
+  async addToWhitelist(userId, reason, addedBy) {
+    await this.exec('INSERT OR REPLACE INTO whitelist(user_id,reason,added_by,created_at) VALUES(?,?,?,?)', userId, reason, addedBy, new Date().toISOString());
+  }
+  async removeFromWhitelist(userId) { await this.exec('DELETE FROM whitelist WHERE user_id=?', userId); }
+  async getWhitelist(page = 1, pageSize = 20) {
+    const offset = (page - 1) * pageSize;
+    const [entries, countRow] = await Promise.all([
+      this.all(`SELECT w.*, u.username, u.first_name, u.last_name FROM whitelist w LEFT JOIN users u ON w.user_id=u.user_id ORDER BY w.created_at DESC LIMIT ? OFFSET ?`, pageSize, offset),
+      this.first('SELECT COUNT(*) as cnt FROM whitelist'),
+    ]);
+    return { users: entries, total: countRow?.cnt || 0 };
+  }
+  async getWhitelistRaw() { return this.all('SELECT * FROM whitelist'); }
+
+  // Messages
+  async addMsg({ userId, direction, content, messageType = 'text', telegramMessageId }) {
+    const id = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const ts = new Date().toISOString();
+    await this.exec('INSERT INTO messages(id,user_id,direction,content,message_type,telegram_message_id,created_at) VALUES(?,?,?,?,?,?,?)', id, userId, direction, content||'', messageType, telegramMessageId||null, ts);
+    await this.exec('INSERT OR REPLACE INTO recent_convs(user_id,last_message,last_direction,last_at) VALUES(?,?,?,?)', userId, content, direction, ts);
+  }
+  async getMsgs(userId, limit = 50, offset = 0) {
+    return this.all('SELECT * FROM messages WHERE user_id=? ORDER BY created_at ASC LIMIT ? OFFSET ?', userId, limit, offset);
+  }
+  async getRecentConvs(limit = 40) {
+    return this.all(`SELECT r.*, u.username, u.first_name, u.last_name, u.is_blocked FROM recent_convs r LEFT JOIN users u ON r.user_id=u.user_id ORDER BY r.last_at DESC LIMIT ?`, limit);
+  }
+  async getAllMsgsRaw() { return this.all('SELECT * FROM messages'); }
+  async getAllRecentRaw() { return this.all('SELECT * FROM recent_convs'); }
+
+  // Verification (always in KV since it's ephemeral — D1Store delegates)
+  // These will be overridden at DB level to always use KV
+
+  // Stats
+  async getStats() {
+    const [totalRow, blockedRow, msgRow, todayRow] = await Promise.all([
+      this.first('SELECT COUNT(*) as cnt FROM users'),
+      this.first('SELECT COUNT(*) as cnt FROM users WHERE is_blocked=1'),
+      this.first('SELECT COUNT(*) as cnt FROM messages'),
+      this.first(`SELECT COUNT(*) as cnt FROM messages WHERE created_at LIKE ?`, `${new Date().toISOString().slice(0, 10)}%`),
+    ]);
+    return { totalUsers: totalRow?.cnt || 0, blockedUsers: blockedRow?.cnt || 0, totalMessages: msgRow?.cnt || 0, todayMessages: todayRow?.cnt || 0 };
+  }
+
+  // Web users
+  async webUserCount() { const r = await this.first('SELECT COUNT(*) as cnt FROM web_users'); return r?.cnt || 0; }
+  async createWebUser(username, passwordHash) {
+    const id = `${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+    const ts = new Date().toISOString();
+    await this.exec('INSERT INTO web_users(id,username,password_hash,totp_secret,totp_enabled,is_admin,created_at) VALUES(?,?,?,NULL,0,1,?)', id, username, passwordHash, ts);
+    return this.getWebUser(username);
+  }
+  async getWebUser(username) { return this.first('SELECT * FROM web_users WHERE LOWER(username)=LOWER(?)', username); }
+  async getWebUserById(id) { return this.first('SELECT * FROM web_users WHERE id=?', id); }
+  async updateWebUserPassword(id, hash) { await this.exec('UPDATE web_users SET password_hash=? WHERE id=?', hash, id); }
+  async updateWebUserUsername(id, newUsername) { await this.exec('UPDATE web_users SET username=? WHERE id=?', newUsername, id); }
+  async setWebUserTotp(id, secret, enabled) { await this.exec('UPDATE web_users SET totp_secret=?,totp_enabled=? WHERE id=?', secret, enabled ? 1 : 0, id); }
+  async getAllWebUsersRaw() { return this.all('SELECT * FROM web_users'); }
+
+  async initSchema() {
+    for (const stmt of D1_SCHEMA.split(';').map(s => s.trim()).filter(Boolean)) {
+      await this.exec(stmt);
+    }
+  }
+}
+
+// ─── Main DB class ────────────────────────────────────────────────────────────
+export class DB {
+  constructor(kv, d1 = null) {
+    this.kv  = kv;
+    this.d1  = d1;
+    this._kv = new KVStore(kv);
+    this._d1 = d1 ? new D1Store(d1) : null;
+    this._activeStore = null;
+  }
+
+  async _store() {
+    if (this._activeStore) return this._activeStore;
+    const active = (await this.kv.get('config:active_db')) || 'kv';
+    this._activeStore = (active === 'd1' && this._d1) ? this._d1 : this._kv;
+    return this._activeStore;
+  }
+
+  // Verification always uses KV (ephemeral data, TTL support)
+  async setVerify(userId, data, ttlSeconds = 300) { return this._kv.setVerify(userId, data, ttlSeconds); }
+  async getVerify(userId)  { return this._kv.getVerify(userId); }
+  async incVerify(userId)  { return this._kv.incVerify(userId); }
+  async delVerify(userId)  { return this._kv.delVerify(userId); }
+
+  // All other methods delegate to active store
+  async getSetting(key)             { return (await this._store()).getSetting(key); }
+  async setSetting(key, val)        { return (await this._store()).setSetting(key, val); }
+  async getAllSettings()            { return (await this._store()).getAllSettings(); }
+
+  async getUser(id)                        { return (await this._store()).getUser(id); }
+  async upsertUser(u)                      { return (await this._store()).upsertUser(u); }
+  async setUserThread(uid, tid)            { return (await this._store()).setUserThread(uid, tid); }
+  async getUserByThread(tid)               { return (await this._store()).getUserByThread(tid); }
+  async setUserVerified(uid, v)            { return (await this._store()).setUserVerified(uid, v); }
+  async blockUser(uid, r, by, perm)        { return (await this._store()).blockUser(uid, r, by, perm); }
+  async unblockUser(uid)                   { return (await this._store()).unblockUser(uid); }
+  async updateUsername(uid, name)          { return (await this._store()).updateUsername(uid, name); }
+  async searchUsers(q, lim)               { return (await this._store()).searchUsers(q, lim); }
+  async getAllUsers(p, ps)                 { return (await this._store()).getAllUsers(p, ps); }
+  async getBlockedUsers(p, ps)            { return (await this._store()).getBlockedUsers(p, ps); }
+
+  async isWhitelisted(uid)                { return (await this._store()).isWhitelisted(uid); }
+  async addToWhitelist(uid, r, by)        { return (await this._store()).addToWhitelist(uid, r, by); }
+  async removeFromWhitelist(uid)          { return (await this._store()).removeFromWhitelist(uid); }
+  async getWhitelist(p, ps)              { return (await this._store()).getWhitelist(p, ps); }
+
+  async addMsg(opts)                       { return (await this._store()).addMsg(opts); }
+  async getMsgs(uid, lim, off)            { return (await this._store()).getMsgs(uid, lim, off); }
+  async getRecentConvs(lim)              { return (await this._store()).getRecentConvs(lim); }
+  async getStats()                        { return (await this._store()).getStats(); }
+
+  async webUserCount()                    { return (await this._store()).webUserCount(); }
+  async createWebUser(u, h)              { return (await this._store()).createWebUser(u, h); }
+  async getWebUser(u)                    { return (await this._store()).getWebUser(u); }
+  async getWebUserById(id)              { return (await this._store()).getWebUserById(id); }
+  async updateWebUserPassword(id, h)    { return (await this._store()).updateWebUserPassword(id, h); }
+  async updateWebUserUsername(id, u)    { return (await this._store()).updateWebUserUsername(id, u); }
+  async setWebUserTotp(id, s, e)        { return (await this._store()).setWebUserTotp(id, s, e); }
+
+  /** Switch active DB and optionally sync data. */
+  async switchDb(target) {
+    if (target !== 'kv' && target !== 'd1') throw new Error('Invalid target');
+    if (target === 'd1' && !this._d1) throw new Error('D1 not bound');
+    await this.kv.put('config:active_db', target);
+    this._activeStore = null; // reset cache
+  }
+
+  /** Full sync from KV → D1 or D1 → KV. */
+  async syncData(from, to) {
+    const src = from === 'kv' ? this._kv : this._d1;
+    const dst = to   === 'kv' ? this._kv : this._d1;
+    if (!src || !dst) throw new Error('Store not available');
+
+    if (to === 'd1') await this._d1.initSchema();
+
+    // Sync settings
+    const settings = await src.getAllSettings();
+    for (const [k, v] of Object.entries(settings)) await dst.setSetting(k, v);
+
+    // Sync users
+    const users = await src.getAllUsersRaw();
+    for (const u of users) await dst.upsertUser(u);
+
+    // Sync whitelist
+    const wl = await src.getWhitelistRaw();
+    for (const e of wl) await dst.addToWhitelist(e.user_id, e.reason, e.added_by);
+
+    // Sync messages
+    const msgs = await src.getAllMsgsRaw();
+    for (const m of msgs) await dst.addMsg(m);
+
+    // Sync web users
+    const wu = await src.getAllWebUsersRaw();
+    for (const u of wu) {
+      const ex = await dst.getWebUserById(u.id);
+      if (!ex) await dst.createWebUser(u.username, u.password_hash);
     }
   }
 
-  /**
-   * 首次部署自动创建默认管理员账号 admin / admins。
-   * 用 init:default_admin 锁防止并发冷启动重复创建。
-   * 登录成功后请立即在「个人设置」修改密码。
-   */
   async ensureDefaultAdmin() {
     try {
-      const initDone = await this.kv.get('init:default_admin');
-      if (initDone) return;
-
-      const count = await this.webUserCount();
-      if (count === 0) {
-        const hashed = await hashPw('admins');
-        await this.createWebUser('admin', hashed);
-        console.log('Default admin created: admin / admins');
+      if (await this.kv.get('init:admin_done')) return;
+      if (await this._d1?.initSchema().catch(() => {}), false) { /* just init schema */ }
+      if (this._d1) await this._d1.initSchema().catch(console.error);
+      if ((await this.webUserCount()) === 0) {
+        await this.createWebUser('admin', await hashPw('admins'));
+        console.log('Default admin: admin / admins');
       }
-      await this.kv.put('init:default_admin', '1');
-    } catch (e) {
-      console.error('ensureDefaultAdmin error:', e);
-    }
+      await this.kv.put('init:admin_done', '1');
+    } catch (e) { console.error('ensureDefaultAdmin:', e); }
   }
 }
