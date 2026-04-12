@@ -269,10 +269,12 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl }) {
       return;
     }
 
-    if (dbUser.is_permanent_block) {
-      await tg.sendMsg({ chatId: user.id, text: '⛔ <b>您已被永久封禁</b>，如有疑问请联系管理员。' });
-    } else if (settings.AUTO_UNBLOCK_ENABLED === 'true') {
+    // AUTO_UNBLOCK_ENABLED takes priority: when enabled, all banned users can appeal
+    // (is_permanent_block only prevents appeal when auto-unblock is OFF)
+    if (settings.AUTO_UNBLOCK_ENABLED === 'true') {
       await tg.sendMsg({ chatId: user.id, text: '⛔ <b>您已被封禁</b>\n可发起申诉：', kb: [[{ text: '📝 发起申诉', callback_data: 'appeal:start' }]] });
+    } else if (dbUser.is_permanent_block) {
+      await tg.sendMsg({ chatId: user.id, text: '⛔ <b>您已被永久封禁</b>，如有疑问请联系管理员。' });
     } else {
       await tg.sendMsg({ chatId: user.id, text: '⛔ <b>您已被封禁</b>，请联系管理员。' });
     }
@@ -349,7 +351,19 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl }) {
     await db.addMsg({ userId: user.id, direction: 'incoming', content: msg.text || msg.caption || '[媒体]', messageType: msgType(msg), telegramMessageId: msg.message_id });
     await tg.sendMsg({ chatId: user.id, text: '✅ 消息已发送，管理员将尽快回复。' });
   } else {
-    console.error('copyMsg failed:', res);
+    // Topic may have been deleted — clear stale thread, recreate, and retry once
+    console.warn('copyMsg failed (thread may be deleted), retrying with new thread:', res);
+    await db.clearUserThread(user.id);
+    const newTid = await getOrCreateThread(tg, db, user, groupId, kv);
+    if (newTid) {
+      const retry = await tg.copyMsg({ chatId: groupId, fromChatId: msg.chat.id, msgId: msg.message_id, threadId: newTid });
+      if (retry.ok) {
+        await db.addMsg({ userId: user.id, direction: 'incoming', content: msg.text || msg.caption || '[媒体]', messageType: msgType(msg), telegramMessageId: msg.message_id });
+        await tg.sendMsg({ chatId: user.id, text: '✅ 消息已发送，管理员将尽快回复。' });
+        return;
+      }
+    }
+    console.error('copyMsg retry also failed:', res);
     await tg.sendMsg({ chatId: user.id, text: '❌ 发送失败，请稍后再试。' });
   }
 }
@@ -405,13 +419,19 @@ async function handleAdminPrivateMsg(msg, user, { tg, db, kv, settings, groupId 
 
   if (settings.ADMIN_NOTIFY_ENABLED !== 'true') return;
 
-  // Default: show admin control panel
-  const s  = await db.getStats();
-  await tg.sendMsg({
-    chatId: user.id,
-    text: `🤖 <b>管理员控制台</b>\n\n👥 ${s.totalUsers} 用户  ⛔ ${s.blockedUsers} 封禁\n💬 ${s.totalMessages} 消息  📅 今日 ${s.todayMessages}`,
-    kb: adminPanelKb(settings),
-  });
+  // ADMIN_NOTIFY is ON: forward the admin's message to the forum group (general area)
+  const fwdRes = await tg.copyMsg({ chatId: groupId, fromChatId: msg.chat.id, msgId: msg.message_id });
+  if (fwdRes.ok) {
+    await tg.sendMsg({ chatId: user.id, text: '✅ 消息已转发到话题群组。' });
+  } else {
+    // Fallback: show admin control panel if forwarding fails (e.g. bot not in group yet)
+    const s = await db.getStats();
+    await tg.sendMsg({
+      chatId: user.id,
+      text: `🤖 <b>管理员控制台</b>\n\n👥 ${s.totalUsers} 用户  ⛔ ${s.blockedUsers} 封禁\n💬 ${s.totalMessages} 消息  📅 今日 ${s.todayMessages}`,
+      kb: adminPanelKb(settings),
+    });
+  }
 }
 
 // ── Callback handler ──────────────────────────────────────────────────────────
