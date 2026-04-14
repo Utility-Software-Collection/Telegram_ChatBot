@@ -53,6 +53,9 @@ export function getBotCommands(locale) {
     { command: 'unwl', description: t('bot.cmd.unwl') },
     { command: 'info', description: t('bot.cmd.info') },
     { command: 'panel', description: t('bot.cmd.panel') },
+    { command: 'filters', description: t('bot.cmd.filters') },
+    { command: 'addfilter', description: t('bot.cmd.addfilter') },
+    { command: 'delfilter', description: t('bot.cmd.delfilter') },
   ]
   return { userCmds, adminCmds }
 }

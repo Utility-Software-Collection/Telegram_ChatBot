@@ -228,6 +228,7 @@ export async function onRequest({ request, env }) {
         'ADMIN_NOTIFY_ENABLED',
         'BOT_LOCALE',
         'ZALGO_FILTER_ENABLED',
+        'MESSAGE_FILTER_RULES',
         'WEBHOOK_URL',
       ];
 
@@ -346,11 +347,21 @@ export async function onRequest({ request, env }) {
     }
   }
 
-  if (path === '/settings/sql/export' && request.method === 'GET') {
+  if (path === '/settings/sql/export' && request.method === 'POST') {
     try {
       const active = await db.getActiveDb();
       const sql = await exportBusinessDataSql(db, active);
-      return j({ ok: true, sql, active });
+      const fileName = `${String(active || 'kv').toUpperCase()}.sql`;
+      return new Response(sql, {
+        status: 200,
+        headers: {
+          ...CORS,
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${fileName}"`,
+          'Cache-Control': 'no-store',
+          'X-Active-Db': active,
+        },
+      });
     } catch (e) {
       return err(t('settings.sqlExportFailed', { error: e.message }), 500);
     }

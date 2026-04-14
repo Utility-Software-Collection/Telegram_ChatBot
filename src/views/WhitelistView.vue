@@ -47,9 +47,10 @@
                 <td>
                   <div class="user-cell">
                     <div class="u-ava">{{ (u.first_name || u.username || '?')[0].toUpperCase() }}</div>
-                    <div>
-                      <div style="font-weight:500;font-size:13px">{{ u.first_name }} {{ u.last_name }}</div>
-                      <div class="text-muted text-sm">{{ u.username ? '@' + u.username : '' }}</div>
+                    <div class="user-cell-line">
+                      <span class="u-name">{{ u.first_name }} {{ u.last_name }}</span>
+                      <span class="user-cell-sep">·</span>
+                      <span class="user-cell-meta">{{ u.username ? '@' + u.username : '—' }}</span>
                     </div>
                   </div>
                 </td>
@@ -125,6 +126,10 @@ onMounted(load)
 .page-title-with-icon,
 .sec-title-with-icon{display:flex;align-items:center;gap:8px}
 .quick-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.user-cell{display:flex;align-items:center;gap:10px}
+.user-cell{display:flex;align-items:center;gap:10px;min-width:0}
+.user-cell-line{min-width:0;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.u-name{min-width:0;font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis}
+.user-cell-meta{min-width:0;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis}
+.user-cell-sep{color:var(--text3);flex-shrink:0}
 .u-ava{width:32px;height:32px;border-radius:50%;flex-shrink:0;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
 </style>

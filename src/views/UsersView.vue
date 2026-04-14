@@ -88,9 +88,10 @@
                       <img v-if="avatars[u.user_id]" :src="avatars[u.user_id]" class="ava-img" @error="avatars[u.user_id] = ''" />
                       <span v-else>{{ (u.first_name || u.username || '?')[0].toUpperCase() }}</span>
                     </div>
-                    <div>
-                      <div class="u-name">{{ u.first_name }} {{ u.last_name }}</div>
-                      <div class="text-muted text-sm hide-mobile">{{ u.username ? '@' + u.username : '—' }}</div>
+                    <div class="user-cell-line">
+                      <span class="u-name">{{ u.first_name }} {{ u.last_name }}</span>
+                      <span class="user-cell-sep">·</span>
+                      <span class="user-cell-meta">{{ u.username ? '@' + u.username : t('users.detail.noUsername') }}</span>
                     </div>
                   </div>
                 </td>
@@ -105,7 +106,7 @@
                 </td>
                 <td class="hide-mobile text-muted text-sm">{{ fmtDate(u.created_at) }}</td>
                 <td>
-                  <div class="flex gap-1 flex-wrap">
+                  <div class="row-actions">
                     <button v-if="!u.is_blocked" class="btn-danger btn-sm" @click.stop="blockOne(u)">
                       <AppIcon name="block" :size="14" />
                       {{ t('users.block') }}
@@ -356,9 +357,12 @@ onMounted(() => {
 .inline-icon-text,
 .action-link{display:inline-flex;align-items:center;gap:8px}
 .quick-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.user-cell{display:flex;align-items:center;gap:10px}
-.u-name{font-weight:500;font-size:13px;text-decoration:underline;text-decoration-color:transparent;transition:.15s}
+.user-cell{display:flex;align-items:center;gap:10px;min-width:0}
+.user-cell-line{min-width:0;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.u-name{min-width:0;font-weight:500;font-size:13px;text-decoration:underline;text-decoration-color:transparent;transition:.15s;overflow:hidden;text-overflow:ellipsis}
 .user-cell:hover .u-name{text-decoration-color:var(--accent)}
+.user-cell-meta{min-width:0;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis}
+.user-cell-sep{color:var(--text3);flex-shrink:0}
 .u-ava{width:34px;height:34px;border-radius:50%;flex-shrink:0;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;overflow:hidden}
 .u-ava.blocked{background:rgba(247,79,79,.15);color:var(--danger)}
 .ava-img{width:100%;height:100%;object-fit:cover}
@@ -367,9 +371,15 @@ onMounted(() => {
 .batch-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--accent-dim);border:1px solid rgba(79,142,247,.3);border-radius:var(--rs);flex-wrap:wrap}
 .batch-actions{align-items:center}
 .batch-actions button{white-space:nowrap}
+.row-actions{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;white-space:nowrap}
+.row-actions .btn-sm,
+.row-actions .action-link{flex:0 0 auto}
 @media (max-width:768px){
   .batch-actions{width:100%}
   .batch-actions button{flex:0 1 auto;max-width:100%}
+  .user-cell-line{gap:4px}
+  .u-name,.user-cell-meta{font-size:12px}
+  .row-actions{gap:3px}
 }
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px}
 .modal-card{width:100%;max-width:440px;padding:24px;max-height:90vh;overflow-y:auto}

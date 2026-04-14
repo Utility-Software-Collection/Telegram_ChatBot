@@ -1,18 +1,28 @@
-// functions/_shared/bot.js
 import { TG, esc, name, msgType } from './tg.js';
 import { generateCode, generateWrongOptions } from './captcha.js';
 import { createBotT, getBotCommands, normalizeBotLocale } from './bot-i18n.js';
+import {
+  findMatchedMessageFilterRule,
+  getMessageFilterRuleLabel,
+  normalizeMessageFilterRule,
+  parseMessageFilterRules,
+  serializeMessageFilterRules,
+} from '../../shared/message-filters.js';
 
-// ── Verification helpers ──────────────────────────────────────────────────────
+// ── 验证辅助方法 ─────────────────────────────────────────────────────────────
 const MATH_QS = [
   {q:'1 + 1',a:'2'},{q:'3 × 3',a:'9'},{q:'10 - 4',a:'6'},{q:'2 + 5',a:'7'},
   {q:'4 × 2',a:'8'},{q:'15 ÷ 3',a:'5'},{q:'6 + 7',a:'13'},{q:'9 - 3',a:'6'},
   {q:'8 + 4',a:'12'},{q:'7 × 2',a:'14'},{q:'18 ÷ 2',a:'9'},{q:'11 - 5',a:'6'},
 ];
 
-function rows2(items, mk) {
+const VERIFY_OPTION_COUNT = 6;
+const VERIFY_OPTION_COLUMNS = 3;
+
+function rowsN(items, cols, mk) {
   const rows = [];
-  for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2).map(mk));
+  const width = Math.max(1, cols || 1);
+  for (let i = 0; i < items.length; i += width) rows.push(items.slice(i, i + width).map(mk));
   return rows;
 }
 
@@ -20,16 +30,23 @@ function mkMathVerify() {
   const {q, a} = MATH_QS[Math.floor(Math.random() * MATH_QS.length)];
   const cor = parseInt(a, 10);
   const opts = new Set([cor]);
-  while (opts.size < 4) { const c = cor + Math.floor(Math.random() * 9) - 4; if (c > 0 && c !== cor) opts.add(c); }
+  while (opts.size < VERIFY_OPTION_COUNT) {
+    const c = cor + Math.floor(Math.random() * 15) - 7;
+    if (c > 0 && c !== cor) opts.add(c);
+  }
   const arr = [...opts].sort(() => Math.random() - 0.5).map(String);
-  return { question: `<b>${q} = ?</b>`, answer: a, kb: rows2(arr, n => ({ text: n, callback_data: `v:${n}` })) };
+  return {
+    question: `<b>${q} = ?</b>`,
+    answer: a,
+    kb: rowsN(arr, VERIFY_OPTION_COLUMNS, n => ({ text: n, callback_data: `v:${n}` })),
+  };
 }
 
 function randId() {
   return [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ── Rate limit ────────────────────────────────────────────────────────────────
+// ── 频率限制 ─────────────────────────────────────────────────────────────────
 const rateMap = new Map();
 function rateCheck(uid, max) {
   const now = Date.now();
@@ -50,11 +67,11 @@ function getUserMsgDeleteSeconds(settings) {
 
 function getInlineKbMsgDeleteSeconds(settings) {
   if (settings?.INLINE_KB_MSG_DELETE_ENABLED === 'false') return 0;
-  // Cloudflare Pages Functions background tasks are short-lived; keeping this <=25s improves reliability.
+  // Cloudflare Pages Functions 的后台任务生命周期较短，限制在 25 秒内更稳妥。
   return parseBoundedInt(settings?.INLINE_KB_MSG_DELETE_SECONDS || settings?.USER_MSG_DELETE_SECONDS || '15', 15, 0, 25);
 }
 
-const ADMIN_EDIT_SYNC_WINDOW_MS = 3 * 60 * 1000;
+const ADMIN_EDIT_SYNC_WINDOW_MS = 30 * 1000;
 
 const ADMIN_NUMERIC_INPUT_FIELDS = {
   VERIFICATION_TIMEOUT: { min: 60, max: 900, unit: 's', labelKey: 'panel.timeout', defaultValue: 300 },
@@ -103,6 +120,83 @@ function buildAdminNumericPromptText(t, cfg) {
   const label = t(cfg.labelKey);
   const unit = cfg.unit || '';
   return t('admin.numericPrompt', { label, min: cfg.min, max: cfg.max, unit });
+}
+
+function getMessageFilterRules(settings) {
+  return parseMessageFilterRules(settings?.MESSAGE_FILTER_RULES);
+}
+
+function findBlockedRuleForMessage(settings, message) {
+  const rules = getMessageFilterRules(settings);
+  if (!rules.length) return null;
+  return findMatchedMessageFilterRule(rules, message);
+}
+
+function buildMessageFilterListText(settings, t) {
+  const rules = getMessageFilterRules(settings);
+  if (!rules.length) return t('filter.empty');
+
+  const lines = rules.map((rule, index) => `${index + 1}. <code>${esc(rule.id)}</code>\n${esc(getMessageFilterRuleLabel(rule))}`);
+  return `${t('filter.title')}\n\n${lines.join('\n\n')}`;
+}
+
+function buildMessageBlockedText(rule, t) {
+  if (!rule) return t('filter.blocked');
+  return t('filter.blockedWithRule', { rule: getMessageFilterRuleLabel(rule) });
+}
+
+function parseMessageFilterInput(raw) {
+  const input = String(raw || '').trim();
+  if (!input) return null;
+
+  const firstSpace = input.indexOf(' ');
+  if (firstSpace < 0) return { type: 'text', value: input };
+
+  const type = input.slice(0, firstSpace).trim().toLowerCase();
+  const value = input.slice(firstSpace + 1).trim();
+  if (!value) return null;
+
+  if (type === 'text' || type === 'regex' || type === 'json') {
+    return { type, value };
+  }
+
+  return { type: 'text', value: input };
+}
+
+function buildMessageFilterManageText(settings, t) {
+  return `${buildMessageFilterListText(settings, t)}\n\n${t('filter.help')}`;
+}
+
+async function saveMessageFilterRules(db, rules) {
+  await db.setSetting('MESSAGE_FILTER_RULES', serializeMessageFilterRules(rules));
+}
+
+async function addMessageFilterRule(db, settings, input) {
+  const rules = getMessageFilterRules(settings);
+  const nextRule = normalizeMessageFilterRule(input);
+  const nextRules = [...rules, nextRule];
+  await saveMessageFilterRules(db, nextRules);
+  return nextRules;
+}
+
+async function removeMessageFilterRule(db, settings, token) {
+  const rawToken = String(token || '').trim();
+  const rules = getMessageFilterRules(settings);
+  if (!rawToken || !rules.length) return { removed: null, rules };
+
+  let index = -1;
+  if (/^\d+$/.test(rawToken)) {
+    const n = parseInt(rawToken, 10);
+    if (n >= 1 && n <= rules.length) index = n - 1;
+  } else {
+    index = rules.findIndex((rule) => String(rule.id) === rawToken);
+  }
+
+  if (index < 0) return { removed: null, rules };
+
+  const [removed] = rules.splice(index, 1);
+  await saveMessageFilterRules(db, rules);
+  return { removed, rules };
 }
 
 function hasInlineKeyboard(kb) {
@@ -257,22 +351,22 @@ async function withUserLock(kv, userLockId, fn, { ttlSeconds = 60, retries = 8, 
   }
 }
 
-// ── Thread management ─────────────────────────────────────────────────────────
+// ── 话题管理 ─────────────────────────────────────────────────────────────────
 async function getOrCreateThread(tg, db, user, groupId, kv, t) {
-  // Atomic-ish lock to prevent duplicate topics
+  // 使用近似原子锁避免重复创建话题
   const lockKey = `lock:thread:${user.id}`;
   const existing = await db.getUser(user.id);
   if (existing?.thread_id) return existing.thread_id;
 
   const locked = await kv.get(lockKey);
   if (locked) {
-    // Wait briefly then retry
-    await new Promise(r => setTimeout(r, 1500));
+    // 短暂等待后重试
+    await new Promise(r => setTimeout(r, 350));
     const u2 = await db.getUser(user.id);
     if (u2?.thread_id) return u2.thread_id;
   }
 
-  await kv.put(lockKey, '1', { expirationTtl: 60 }); // CF KV minimum TTL is 60s
+  await kv.put(lockKey, '1', { expirationTtl: 60 }); // Cloudflare KV 的最小 TTL 为 60 秒
   try {
     const baseTopicName = name(user) || t('thread.userTopic', { id: user.id });
     const topicName = `${baseTopicName} [${user.id}]`.slice(0, 128);
@@ -292,16 +386,27 @@ async function sendCard(tg, db, user, groupId, tid, t) {
   const kb   = fullUserKb(user.id, u, t);
   const text = buildCardText(user, u, t);
 
+  const pinCardMessage = async (msgId) => {
+    if (!msgId) return;
+    await tg.pinChatMessage({ chatId: groupId, msgId, disableNotification: true }).catch((e) => {
+      console.error('pin topic card failed:', e);
+    });
+  };
+
   try {
     const photos = await tg.getUserProfilePhotos({ userId: user.id, limit: 1 });
     if (photos.ok && photos.result.total_count > 0) {
       const fileId = photos.result.photos[0][0].file_id;
       const r = await tg.sendPhoto({ chatId: groupId, fileId, caption: text, threadId: tid, kb });
-      if (r.ok) return;
+      if (r.ok) {
+        await pinCardMessage(r.result?.message_id);
+        return;
+      }
     }
-  } catch { /* no photo */ }
+  } catch {}
 
-  await tg.sendMsg({ chatId: groupId, text, threadId: tid, kb });
+  const r = await tg.sendMsg({ chatId: groupId, text, threadId: tid, kb });
+  if (r?.ok) await pinCardMessage(r.result?.message_id);
 }
 
 function buildCardText(user, u, t) {
@@ -331,7 +436,7 @@ async function sendToUserThreadOrAdminDm({ tg, db, settings, waitUntil, groupId,
   return { sent: dmCount > 0, via: dmCount > 0 ? 'admin_dm' : 'none' };
 }
 
-// ── Keyboards ─────────────────────────────────────────────────────────────────
+// ── 键盘布局 ─────────────────────────────────────────────────────────────────
 function fullUserKb(uid, u, t) {
   return [
     [
@@ -353,6 +458,7 @@ function adminPanelKb(s, t) {
     ? t('panel.cap.imageNumeric')
     : (s.CAPTCHA_TYPE === 'image_alphanumeric' ? t('panel.cap.imageAlnum') : t('panel.cap.math'));
   const inlineKbDeleteSec = getInlineKbMsgDeleteSeconds(s);
+  const filterCount = getMessageFilterRules(s).length;
   return [
     [
       { text: `✅ ${t('panel.verify')}: ${s.VERIFICATION_ENABLED === 'true' ? t('panel.on') : t('panel.off')}`, callback_data: 'adm:tv' },
@@ -372,6 +478,7 @@ function adminPanelKb(s, t) {
     ],
     [
       { text: `🧹 ${t('panel.inlineKbDelete')}: ${inlineKbDeleteSec}s`, callback_data: 'adm:ik' },
+      { text: `🛡 ${t('panel.messageFilter')}: ${filterCount}`, callback_data: 'adm:mf' },
     ],
     [
       { text: t('kb.stats'), callback_data: 'adm:st' },
@@ -424,6 +531,16 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
     const target = await db.getUserByThread(msg.message_thread_id);
     if (!target) return;
 
+    const blockedRule = findBlockedRuleForMessage(settings, msg);
+    if (blockedRule) {
+      await tg.sendMsg({
+        chatId: msg.chat.id,
+        threadId: msg.message_thread_id,
+        text: buildMessageBlockedText(blockedRule, t),
+      }).catch(() => {});
+      return;
+    }
+
     const shouldForward = await shouldProcessMessageOnce(kv, 'admin-topic-forward', msg.chat.id, msg.message_id);
     if (!shouldForward) return;
 
@@ -441,7 +558,14 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
       forwardedAt: Date.now(),
     });
 
-    await db.addMsg({ userId: target.user_id, direction: 'outgoing', content: msg.text || msg.caption || t('content.media'), messageType: msgType(msg) });
+    const recordTask = db.addMsg({
+      userId: target.user_id,
+      direction: 'outgoing',
+      content: msg.text || msg.caption || t('content.media'),
+      messageType: msgType(msg),
+    }).catch((e) => console.error('record admin topic msg failed:', e));
+    if (waitUntil) waitUntil(recordTask);
+    else await recordTask;
     return;
   }
 
@@ -547,6 +671,18 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
     return;
   }
 
+  const blockedRule = findBlockedRuleForMessage(settings, msg);
+  if (blockedRule) {
+    await sendUserMsg({
+      tg,
+      settings,
+      waitUntil,
+      chatId: user.id,
+      text: buildMessageBlockedText(blockedRule, t),
+    });
+    return;
+  }
+
   // ── Whitelist bypass ──────────────────────────────────────────────────────
   const whitelisted = settings.WHITELIST_ENABLED === 'true' && await db.isWhitelisted(user.id);
 
@@ -596,9 +732,9 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
           const captchaId  = randId();
           const code       = generateCode(captchaType);
           await kv.put(`captcha_render:${captchaId}`, code, { expirationTtl: timeout + 60 });
-          const wrongs     = generateWrongOptions(code, captchaType);
+          const wrongs     = generateWrongOptions(code, captchaType, VERIFY_OPTION_COUNT - 1);
           const opts       = [code, ...wrongs].sort(() => Math.random() - 0.5);
-          const kb         = rows2(opts, o => ({ text: o, callback_data: `iv:${o}:${captchaId}` }));
+          const kb         = rowsN(opts, VERIFY_OPTION_COLUMNS, o => ({ text: o, callback_data: `iv:${o}:${captchaId}` }));
           await db.setVerify(user.id, { answer: code, captcha_id: captchaId, captcha_type: captchaType }, timeout);
           const typeLabel  = captchaType === 'image_alphanumeric' ? t('verify.imgAlpha') : t('verify.imgNum');
           const caption    = t('verify.image', { typeLabel });
@@ -635,7 +771,15 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
   // Use copyMessage to forward ALL content types with full formatting preserved
   const res = await tg.copyMsg({ chatId: groupId, fromChatId: msg.chat.id, msgId: msg.message_id, threadId: tid });
   if (res.ok) {
-    await db.addMsg({ userId: user.id, direction: 'incoming', content: msg.text || msg.caption || t('content.media'), messageType: msgType(msg), telegramMessageId: msg.message_id });
+    const recordTask = db.addMsg({
+      userId: user.id,
+      direction: 'incoming',
+      content: msg.text || msg.caption || t('content.media'),
+      messageType: msgType(msg),
+      telegramMessageId: msg.message_id,
+    }).catch((e) => console.error('record user msg failed:', e));
+    if (waitUntil) waitUntil(recordTask);
+    else await recordTask;
     await tg.sendMsg({ chatId: user.id, text: t('sentToAdmin') });
   } else {
     // Topic may have been deleted — clear stale thread, recreate, and retry once
@@ -645,7 +789,15 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
     if (newTid) {
       const retry = await tg.copyMsg({ chatId: groupId, fromChatId: msg.chat.id, msgId: msg.message_id, threadId: newTid });
       if (retry.ok) {
-        await db.addMsg({ userId: user.id, direction: 'incoming', content: msg.text || msg.caption || t('content.media'), messageType: msgType(msg), telegramMessageId: msg.message_id });
+        const recordTask = db.addMsg({
+          userId: user.id,
+          direction: 'incoming',
+          content: msg.text || msg.caption || t('content.media'),
+          messageType: msgType(msg),
+          telegramMessageId: msg.message_id,
+        }).catch((e) => console.error('record retried user msg failed:', e));
+        if (waitUntil) waitUntil(recordTask);
+        else await recordTask;
         await tg.sendMsg({ chatId: user.id, text: t('sentToAdmin') });
         return;
       }
@@ -685,6 +837,17 @@ async function handleEditedMsg(msg, { tg, db, kv, settings }) {
 
   if (msg.text?.startsWith('/')) {
     await deleteAdminForwardMap(kv, msg.chat.id, msg.message_id);
+    return;
+  }
+
+  const blockedRule = findBlockedRuleForMessage(settings, msg);
+  if (blockedRule) {
+    await deleteAdminForwardMap(kv, msg.chat.id, msg.message_id);
+    await tg.sendMsg({
+      chatId: msg.chat.id,
+      threadId: msg.message_thread_id,
+      text: buildMessageBlockedText(blockedRule, createBotT(normalizeBotLocale(settings.BOT_LOCALE))),
+    }).catch(() => {});
     return;
   }
 
@@ -810,6 +973,55 @@ async function handleAdminPrivateMsg(msg, user, { tg, db, kv, settings, groupId,
         text: buildDetailText(u, false, t),
         kb: fullUserKb(u.user_id, u, t),
       });
+      return;
+    }
+    if (cmd === 'filters') {
+      const latest = await db.getAllSettings();
+      await tg.sendMsg({ chatId: user.id, text: buildMessageFilterManageText(latest, t) });
+      return;
+    }
+    if (cmd === 'addfilter') {
+      const rawInput = msg.text.trim().slice(parts[0].length).trim();
+      const parsed = parseMessageFilterInput(rawInput);
+      if (!parsed) {
+        await tg.sendMsg({ chatId: user.id, text: t('filter.addHelp') });
+        return;
+      }
+
+      try {
+        const latest = await db.getAllSettings();
+        const nextRules = await addMessageFilterRule(db, latest, parsed);
+        const addedRule = nextRules[nextRules.length - 1];
+        await tg.sendMsg({
+          chatId: user.id,
+          text: t('filter.added', { rule: getMessageFilterRuleLabel(addedRule) }),
+        });
+        const refreshed = await db.getAllSettings();
+        await tg.sendMsg({ chatId: user.id, text: buildMessageFilterManageText(refreshed, t) });
+      } catch (e) {
+        await tg.sendMsg({ chatId: user.id, text: t('filter.invalid', { error: e?.message || '' }) });
+      }
+      return;
+    }
+    if (cmd === 'delfilter') {
+      if (!arg) {
+        await tg.sendMsg({ chatId: user.id, text: t('filter.delHelp') });
+        return;
+      }
+
+      const latest = await db.getAllSettings();
+      const { removed } = await removeMessageFilterRule(db, latest, arg);
+      if (!removed) {
+        await tg.sendMsg({ chatId: user.id, text: t('filter.notFound') });
+        return;
+      }
+
+      await tg.sendMsg({
+        chatId: user.id,
+        text: t('filter.removed', { rule: getMessageFilterRuleLabel(removed) }),
+      });
+      const refreshed = await db.getAllSettings();
+      await tg.sendMsg({ chatId: user.id, text: buildMessageFilterManageText(refreshed, t) });
       return;
     }
 
@@ -1109,6 +1321,20 @@ async function handleAdmCb(q, action, { tg, db, kv, settings, chatId, msgId, adm
     const ns = await db.getAllSettings();
     await editUserKb({ tg, settings: ns, waitUntil, chatId, msgId, kb: adminPanelKb(ns, t) });
     await tg.answerCb({ id: q.id, text: t('captchaTypeSwitched') });
+    return;
+  }
+
+  if (action === 'mf') {
+    await editUserText({
+      tg,
+      settings,
+      waitUntil,
+      chatId,
+      msgId,
+      text: buildMessageFilterManageText(settings, t),
+      kb: [[{ text: t('cb.back'), callback_data: 'adm:bk' }]],
+    });
+    await tg.answerCb({ id: q.id });
     return;
   }
 

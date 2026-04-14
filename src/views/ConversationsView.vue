@@ -19,11 +19,12 @@
               <span v-else>{{ (c.first_name || c.username || '?')[0].toUpperCase() }}</span>
             </div>
             <div class="item-body">
-              <div class="item-name">
-                {{ c.first_name || c.username || c.user_id }}
-                <span v-if="c.is_blocked" class="badge badge-danger" style="font-size:9px;margin-left:4px">{{ t('conv.blockedTag') }}</span>
+              <div class="item-line">
+                <span class="item-name">{{ c.first_name || c.username || c.user_id }}</span>
+                <span v-if="c.is_blocked" class="badge badge-danger" style="font-size:9px">{{ t('conv.blockedTag') }}</span>
+                <span class="item-sep">·</span>
+                <span class="item-preview">{{ c.last_direction === 'outgoing' ? '← ' : '→ ' }}{{ c.last_message || t('conv.noMessage') }}</span>
               </div>
-              <div class="item-preview">{{ c.last_direction === 'outgoing' ? '← ' : '→ ' }}{{ c.last_message || t('conv.noMessage') }}</div>
             </div>
             <div class="item-time">{{ fmtShort(c.last_at) }}</div>
           </div>
@@ -94,7 +95,7 @@ import { useRoute } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import api from '../stores/api.js'
 import { useI18nStore } from '../stores/i18n'
-import { getLatestTimestamp, limitToLast, mergeByKey, readLocalCache, removeLocalCache, writeLocalCache } from '../stores/local-cache.js'
+import { getLatestTimestamp, mergeByKey, readLocalCache, writeLocalCache } from '../stores/local-cache.js'
 
 const route = useRoute()
 const i18n = useI18nStore()
@@ -107,7 +108,6 @@ const avatars = ref({})
 const msgRequestToken = ref(0)
 
 const CONV_LIST_CACHE_KEY = 'conversations:list'
-const convMessagesCacheKey = uid => `conversations:messages:${uid}`
 
 const filtered = computed(() => {
   if (!search.value) return convs.value
@@ -184,39 +184,20 @@ async function selectUser(c) {
   selUser.value = { ...c }
   mobileView.value = 'detail'
 
-  const cacheKey = convMessagesCacheKey(uid)
-  const cached = readLocalCache(cacheKey)
-  const cachedMessages = Array.isArray(cached?.messages) ? cached.messages : []
-
-  if (cached?.user) {
-    selUser.value = cached.user
-    msgs.value = cachedMessages
-    loadingMsgs.value = false
-  } else {
-    msgs.value = []
-    loadingMsgs.value = true
-  }
+  msgs.value = []
+  loadingMsgs.value = true
 
   try {
-    const since = getLatestTimestamp(cachedMessages, 'created_at')
-    const query = since ? `?since=${encodeURIComponent(since)}` : ''
-    const d = await api.get(`/api/conversations/${uid}${query}`)
+    const d = await api.get(`/api/conversations/${uid}`)
 
     if (requestToken !== msgRequestToken.value || selId.value !== uid) return
 
     const incomingMessages = Array.isArray(d?.messages) ? d.messages : []
     const nextUser = d.user || c
-    const nextMessages = since
-      ? limitToLast(
-        mergeByKey(cachedMessages, incomingMessages, 'id', (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)),
-        200,
-      )
-      : incomingMessages
 
     selUser.value = nextUser
-    msgs.value = nextMessages
+    msgs.value = incomingMessages
 
-    writeLocalCache(cacheKey, { user: nextUser, messages: nextMessages })
     tryLoadAvatar(uid)
     updateConv(uid, { ...c, ...(d.user || {}) })
     await nextTick()
@@ -237,7 +218,6 @@ async function deleteConv() {
     const r = await api.delete(`/api/conversations/${uid}`)
     convs.value = convs.value.filter(c => c.user_id !== uid)
     writeLocalCache(CONV_LIST_CACHE_KEY, convs.value)
-    removeLocalCache(convMessagesCacheKey(uid))
     selUser.value = null; selId.value = null; msgs.value = []
     mobileView.value = 'list'
     if (r.reVerifyRequired) alert(t('conv.deleteSuccessReverify'))
@@ -265,7 +245,6 @@ function updateConv(uid, patch) {
   }
   if (selUser.value?.user_id === uid) {
     selUser.value = { ...selUser.value, ...patch }
-    writeLocalCache(convMessagesCacheKey(uid), { user: selUser.value, messages: msgs.value })
   }
 }
 
@@ -323,8 +302,10 @@ onMounted(async () => {
 .item-ava.blocked{background:rgba(247,79,79,.15);color:var(--danger)}
 .ava-img{width:100%;height:100%;object-fit:cover}
 .item-body{flex:1;min-width:0}
-.item-name{font-size:13px;font-weight:500;display:flex;align-items:center;gap:4px}
-.item-preview{font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.item-line{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap}
+.item-name{min-width:0;font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.item-preview{min-width:0;font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis}
+.item-sep{color:var(--text3);flex-shrink:0}
 .item-time{font-size:11px;color:var(--text3);flex-shrink:0}
 .conv-right{flex:1;display:flex;flex-direction:column;min-width:0}
 @media(max-width:768px){.conv-right{width:100%}}

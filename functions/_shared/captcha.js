@@ -37,7 +37,7 @@ export function generateCode(type) {
   return Array.from(buf, b => pool[b % pool.length]).join('');
 }
 
-export function generateWrongOptions(correct, type) {
+export function generateWrongOptions(correct, type, count = 3) {
   const pool = type === 'image_alphanumeric' ? ALPHA_CHARS : NUMERIC_CHARS;
   const len  = correct.length;
   const wrongs = new Set();
@@ -78,7 +78,7 @@ export function generateWrongOptions(correct, type) {
 
   const minSim = Math.max(2, len - 2);
   let tries = 0;
-  while (wrongs.size < 3 && tries < 120) {
+  while (wrongs.size < count && tries < 240) {
     tries++;
     let candidate;
     if (tries % 3 === 0) candidate = mutateTwo(correct);
@@ -90,7 +90,7 @@ export function generateWrongOptions(correct, type) {
     wrongs.add(candidate);
   }
 
-  while (wrongs.size < 3) {
+  while (wrongs.size < count) {
     const buf = new Uint8Array(len);
     crypto.getRandomValues(buf);
     const w = Array.from(buf, b => pool[b % pool.length]).join('');

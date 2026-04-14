@@ -2,7 +2,7 @@
 import axios from 'axios'
 import { createT, normalizeLocale } from '../../shared/i18n.js'
 import { isZalgoFilterEnabled, sanitizeDataTree } from '../../shared/display-name.js'
-import { clearLocalCache, readLocalCache } from './local-cache.js'
+import { readLocalCache } from './local-cache.js'
 
 const api = axios.create({ timeout: 30000, headers: { 'Content-Type': 'application/json' }, withCredentials: true })
 
@@ -33,14 +33,7 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   r => sanitizeDataTree(r.data, shouldSanitizeDisplayNames(r.data)),
   error => {
-    const status  = error.response?.status
     const message = error.response?.data?.error || error.message || t('store.api.requestFailed')
-    if (status === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('username')
-      localStorage.removeItem('isAdmin')
-      clearLocalCache()
-    }
     return Promise.reject(new Error(message))
   }
 )

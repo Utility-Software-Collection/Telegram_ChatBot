@@ -137,6 +137,13 @@ export class TG {
   reopenForumTopic({ chatId, threadId }) {
     return this.call('reopenForumTopic', { chat_id: chatId, message_thread_id: threadId });
   }
+  pinChatMessage({ chatId, msgId, disableNotification = true }) {
+    return this.call('pinChatMessage', {
+      chat_id: chatId,
+      message_id: msgId,
+      disable_notification: disableNotification,
+    });
+  }
   setWebhook({ url, secret }) {
     return this.call('setWebhook', {
       url, secret_token: secret,
