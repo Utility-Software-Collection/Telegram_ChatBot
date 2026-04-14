@@ -35,8 +35,8 @@
           <label>{{ t('settings.topicGroupId') }} <span class="req">*</span></label>
           <div class="row-g">
             <input v-model="form.FORUM_GROUP_ID" :placeholder="t('settings.topicGroupPh')" />
-            <button class="btn-ghost btn-sm" @click="resolveChat(form.FORUM_GROUP_ID, 'group')" :disabled="resolvingGroup">
-              {{ resolvingGroup ? '…' : `🔍 ${t('settings.resolve')}` }}
+            <button class="btn-ghost btn-sm utility-btn" @click="resolveChat(form.FORUM_GROUP_ID, 'group')" :disabled="resolvingGroup">
+              {{ resolvingGroup ? '…' : t('settings.resolve') }}
             </button>
           </div>
           <div v-if="groupInfo" class="resolve-card">
@@ -45,7 +45,7 @@
               <div style="font-weight:600">{{ groupInfo.title }}</div>
               <div class="text-muted text-sm">{{ t('common.id') }}: <code>{{ groupInfo.id }}</code></div>
             </div>
-            <button class="btn-primary btn-sm" @click="form.FORUM_GROUP_ID = String(groupInfo.id)">{{ t('settings.use') }}</button>
+            <button class="btn-primary btn-sm utility-btn" @click="form.FORUM_GROUP_ID = String(groupInfo.id)">{{ t('settings.use') }}</button>
           </div>
           <div v-if="groupErr" class="form-hint text-danger">{{ groupErr }}</div>
         </div>
@@ -54,7 +54,7 @@
           <label>{{ t('settings.queryChat') }}</label>
           <div class="row-g">
             <input v-model="chatQuery" :placeholder="t('settings.queryPh')" />
-            <button class="btn-ghost btn-sm" @click="resolveChat(chatQuery, 'custom')" :disabled="resolvingCustom">{{ resolvingCustom ? '…' : t('settings.query') }}</button>
+            <button class="btn-ghost btn-sm utility-btn" @click="resolveChat(chatQuery, 'custom')" :disabled="resolvingCustom">{{ resolvingCustom ? '…' : t('settings.query') }}</button>
           </div>
           <div v-if="customInfo" class="resolve-card">
             <span>{{ { supergroup: '👥', channel: '📢' }[customInfo.type] || '💬' }}</span>
@@ -62,22 +62,36 @@
               <div>{{ customInfo.title || customInfo.first_name }}</div>
               <div class="text-muted text-sm">{{ t('common.id') }}: {{ customInfo.id }}</div>
             </div>
-            <button class="btn-ghost btn-sm" @click="form.FORUM_GROUP_ID = String(customInfo.id)">{{ t('settings.useId') }}</button>
-            <button class="btn-ghost btn-sm" @click="addAdmin(String(customInfo.id))">{{ t('settings.setAdmin') }}</button>
+            <button class="btn-ghost btn-sm utility-btn" @click="form.FORUM_GROUP_ID = String(customInfo.id)">{{ t('settings.useId') }}</button>
+            <button class="btn-ghost btn-sm utility-btn" @click="addAdmin(String(customInfo.id))">{{ t('settings.setAdmin') }}</button>
           </div>
         </div>
 
         <div class="form-group">
           <label>{{ t('settings.adminIds') }}</label>
-          <div class="admin-tags">
-            <div v-for="(id, i) in adminList" :key="i" class="admin-tag">
-              {{ id }}
-              <button @click="removeAdmin(i)">✕</button>
+          <div v-if="adminList.length" class="admin-tags">
+            <div v-for="(id, i) in adminList" :key="id" class="admin-card">
+              <div class="admin-card-avatar">
+                <img
+                  v-if="!adminAvatarErrors[id]"
+                  :src="`/api/users/${id}/avatar`"
+                  alt=""
+                  class="admin-card-avatar-img"
+                  @error="markAdminAvatarError(id)"
+                />
+                <span v-else>{{ adminInitial(id) }}</span>
+              </div>
+              <div class="admin-card-info">
+                <div class="admin-card-name">{{ adminDisplayName(id) }}</div>
+                <div class="admin-card-meta">{{ adminSecondaryLine(id) }}</div>
+                <div class="admin-card-id">{{ t('common.id') }}: {{ id }}</div>
+              </div>
+              <button class="btn-ghost btn-sm admin-card-remove" @click="removeAdmin(i)">✕</button>
             </div>
           </div>
           <div class="row-g">
             <UserSearchPicker v-model="newAdminId" @selected="u => newAdminId = String(u.user_id)" />
-            <button class="btn-ghost btn-sm" @click="addAdmin(newAdminId)">{{ t('settings.add') }}</button>
+            <button class="btn-ghost btn-sm utility-btn" @click="addAdmin(newAdminId)">{{ t('settings.add') }}</button>
           </div>
           <div class="form-hint">{{ t('settings.adminHint') }}</div>
         </div>
@@ -248,7 +262,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../stores/api.js'
 import UserSearchPicker from '../components/UserSearchPicker.vue'
@@ -267,8 +281,12 @@ const webhookUrl = ref(''), settingWh = ref(false), whResult = ref(null)
 const chatQuery = ref(''), resolvingCustom = ref(false), customInfo = ref(null)
 const resolvingGroup = ref(false), groupInfo = ref(null), groupErr = ref('')
 const newAdminId = ref('')
+const adminProfiles = ref({})
+const adminAvatarErrors = ref({})
 const dbInfo = ref({ active: 'kv', hasD1: false }), dbSwitching = ref(false), dbMsg = ref(''), dbOk = ref(true)
 const clearingData = ref(false)
+
+let adminProfileSeq = 0
 
 const boolProp = key => computed({ get: () => form.value[key] === 'true', set: v => { form.value[key] = v ? 'true' : 'false' } })
 const verifyEnabled = boolProp('VERIFICATION_ENABLED')
@@ -286,6 +304,79 @@ const adminList = computed({
 function addAdmin(id) { const v = String(id).trim(); if (v && !adminList.value.includes(v)) adminList.value = [...adminList.value, v]; newAdminId.value = '' }
 function removeAdmin(i) { const a = [...adminList.value]; a.splice(i, 1); adminList.value = a }
 
+function getAdminProfile(id) {
+  return adminProfiles.value[String(id)] || { user_id: String(id), first_name: '', last_name: '', username: '' }
+}
+
+function adminDisplayName(id) {
+  const profile = getAdminProfile(id)
+  const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim()
+  return fullName || (profile.username ? `@${profile.username}` : `ID ${id}`)
+}
+
+function adminSecondaryLine(id) {
+  const profile = getAdminProfile(id)
+  return profile.username ? `@${profile.username}` : t('users.detail.noUsername')
+}
+
+function adminInitial(id) {
+  const profile = getAdminProfile(id)
+  const seed = String(profile.first_name || profile.username || id || '?').replace(/^@/, '')
+  return seed ? seed[0].toUpperCase() : '?'
+}
+
+function markAdminAvatarError(id) {
+  adminAvatarErrors.value = { ...adminAvatarErrors.value, [String(id)]: true }
+}
+
+async function resolveAdminProfiles() {
+  const ids = adminList.value.map((id) => String(id))
+  const currentSeq = ++adminProfileSeq
+
+  if (!ids.length) {
+    adminProfiles.value = {}
+    adminAvatarErrors.value = {}
+    return
+  }
+
+  const nextProfiles = {}
+
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const matches = await api.get(`/api/users/search?q=${encodeURIComponent(id)}`)
+      const exact = Array.isArray(matches) ? matches.find((item) => String(item.user_id) === id) : null
+      if (exact) {
+        nextProfiles[id] = exact
+        return
+      }
+    } catch {}
+
+    try {
+      const result = await api.post('/api/tg/resolve-chat', { chatId: id })
+      const chat = result?.chat
+      if (chat) {
+        nextProfiles[id] = {
+          user_id: String(chat.id || id),
+          first_name: chat.first_name || chat.title || '',
+          last_name: chat.last_name || '',
+          username: chat.username || '',
+        }
+        return
+      }
+    } catch {}
+
+    nextProfiles[id] = { user_id: id, first_name: '', last_name: '', username: '' }
+  }))
+
+  if (currentSeq !== adminProfileSeq) return
+
+  adminProfiles.value = nextProfiles
+  adminAvatarErrors.value = ids.reduce((acc, id) => {
+    acc[id] = false
+    return acc
+  }, {})
+}
+
 async function load() {
   loading.value = true
   try {
@@ -295,6 +386,7 @@ async function load() {
     form.value.WEBHOOK_URL = data.WEBHOOK_URL || ''
     webhookUrl.value = data.WEBHOOK_URL || ''
     form.value.CAPTCHA_SITE_URL = data.CAPTCHA_SITE_URL || ''
+    resolveAdminProfiles()
   } catch (e) {
     saveErr.value = t('settings.loadFailed', { err: e.message })
   } finally {
@@ -392,15 +484,26 @@ async function clearData() {
   }
 }
 
+watch(adminList, () => {
+  resolveAdminProfiles()
+})
+
 onMounted(load)
 </script>
 
 <style scoped>
 .section{margin-bottom:0}
 .resolve-card{margin-top:8px;display:flex;align-items:center;gap:12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:10px 14px;flex-wrap:wrap}
-.admin-tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;min-height:8px}
-.admin-tag{display:flex;align-items:center;gap:4px;background:var(--accent-dim);border:1px solid rgba(79,142,247,.3);color:var(--accent);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:600}
-.admin-tag button{background:none;border:none;color:var(--danger);cursor:pointer;font-size:12px;padding:0 2px}
+.utility-btn{min-width:88px;justify-content:center}
+.admin-tags{display:grid;gap:10px;margin-bottom:10px}
+.admin-card{display:flex;align-items:flex-start;gap:12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px}
+.admin-card-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;overflow:hidden}
+.admin-card-avatar-img{width:100%;height:100%;object-fit:cover}
+.admin-card-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.admin-card-name{font-size:13px;font-weight:600;color:var(--text);word-break:break-word}
+.admin-card-meta{font-size:12px;color:var(--text2);word-break:break-all}
+.admin-card-id{font-size:12px;color:var(--text3);word-break:break-all}
+.admin-card-remove{padding:4px 8px;line-height:1}
 .db-status{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .danger-zone{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .settings-card{margin-bottom:18px}

@@ -307,6 +307,6 @@ onMounted(() => {
 .dr{display:flex;align-items:center;gap:10px;font-size:13px}
 .dl{width:80px;flex-shrink:0;color:var(--text2);font-size:12px}
 .modal-acts{display:flex;gap:8px;flex-wrap:wrap}
-.modal-acts button,.modal-acts a{flex:1;min-width:70px;justify-content:center;font-size:12px;padding:7px 10px}
+.modal-acts button,.modal-acts a{display:inline-flex;align-items:center;flex:1;min-width:70px;justify-content:center;font-size:12px;padding:7px 10px;border-radius:var(--rs)}
 .copy-btn{padding:2px 8px;font-size:11px}
 </style>

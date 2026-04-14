@@ -1,18 +1,27 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import LoginView from '../views/LoginView.vue'
+import RegisterView from '../views/RegisterView.vue'
+import RecoverView from '../views/RecoverView.vue'
+import DashboardView from '../views/DashboardView.vue'
+import ConversationsView from '../views/ConversationsView.vue'
+import UsersView from '../views/UsersView.vue'
+import WhitelistView from '../views/WhitelistView.vue'
+import SettingsView from '../views/SettingsView.vue'
+import ProfileView from '../views/ProfileView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/login',      name: 'Login',         component: () => import('../views/LoginView.vue'),         meta: { public: true } },
-    { path: '/register',   name: 'Register',       component: () => import('../views/RegisterView.vue'),      meta: { public: true } },
-    { path: '/recover',    name: 'Recover',        component: () => import('../views/RecoverView.vue'),       meta: { public: true } },
-    { path: '/',           name: 'Dashboard',      component: () => import('../views/DashboardView.vue') },
-    { path: '/conversations', name: 'Conversations', component: () => import('../views/ConversationsView.vue') },
-    { path: '/users',      name: 'Users',          component: () => import('../views/UsersView.vue') },
-    { path: '/whitelist',  name: 'Whitelist',      component: () => import('../views/WhitelistView.vue') },
-    { path: '/settings',   name: 'Settings',       component: () => import('../views/SettingsView.vue') },
-    { path: '/profile',    name: 'Profile',        component: () => import('../views/ProfileView.vue') },
+    { path: '/login', name: 'Login', component: LoginView, meta: { public: true } },
+    { path: '/register', name: 'Register', component: RegisterView, meta: { public: true } },
+    { path: '/recover', name: 'Recover', component: RecoverView, meta: { public: true } },
+    { path: '/', name: 'Dashboard', component: DashboardView },
+    { path: '/conversations', name: 'Conversations', component: ConversationsView },
+    { path: '/users', name: 'Users', component: UsersView },
+    { path: '/whitelist', name: 'Whitelist', component: WhitelistView },
+    { path: '/settings', name: 'Settings', component: SettingsView },
+    { path: '/profile', name: 'Profile', component: ProfileView },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
@@ -28,23 +37,26 @@ async function fetchAuthStatus() {
 }
 
 router.beforeEach(async (to, from, next) => {
-  const auth  = useAuthStore()
+  const auth = useAuthStore()
   const token = localStorage.getItem('token')
-  if (token && !auth.isLoggedIn) await auth.checkAuth()
+
+  if (token && !auth.isLoggedIn) {
+    await auth.checkAuth()
+  }
+
+  if (auth.isLoggedIn) {
+    if (to.meta.public) return next('/')
+    return next()
+  }
 
   const needFirst = await fetchAuthStatus()
   if (needFirst) {
     if (to.path === '/register') return next()
-    if (auth.isLoggedIn) return next('/')
     return next('/register')
   }
 
-  if (to.meta.public) {
-    if (auth.isLoggedIn && (to.path === '/login' || to.path === '/register')) return next('/')
-    return next()
-  }
-  if (!auth.isLoggedIn) return next('/login')
-  next()
+  if (to.meta.public) return next()
+  return next('/login')
 })
 
 export default router

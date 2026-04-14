@@ -1,6 +1,15 @@
 <template>
   <div class="login-wrap">
     <div class="login-card card">
+      <div class="login-topbar">
+        <select class="lang-select login-lang-select" v-model="selectedLocale" :title="t('app.language')">
+          <option v-for="opt in localeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+        <button class="btn-icon login-theme-btn" type="button" @click="toggleTheme" :title="isDark ? t('app.toggleLight') : t('app.toggleDark')">
+          {{ isDark ? '☀️' : '🌙' }}
+        </button>
+      </div>
+
       <div class="login-logo">🤖</div>
       <h1 class="login-title">{{ t('auth.login.title') }}</h1>
 
@@ -10,10 +19,6 @@
         <div class="login-link-side login-link-left">
           <RouterLink v-if="needsRegistration" to="/register">{{ t('auth.login.register') }}</RouterLink>
         </div>
-
-        <select class="lang-select login-lang-select" v-model="selectedLocale" :title="t('app.language')">
-          <option v-for="opt in localeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-        </select>
 
         <div class="login-link-side login-link-right">
           <RouterLink to="/recover">{{ t('auth.login.recover') }}</RouterLink>
@@ -46,7 +51,7 @@
           <span v-if="loading" class="spinner"></span>{{ loading ? t('auth.login.loggingIn') : t('auth.login.login') }}
         </button>
 
-        <div class="login-switch">
+        <div v-if="totpAvailable" class="login-switch">
           <button class="btn-ghost btn-sm" type="button" :disabled="loading" @click="switchMode('totp_only')">
             {{ t('auth.login.switchToTotp') }}
           </button>
@@ -83,7 +88,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useI18nStore } from '../stores/i18n'
@@ -100,6 +105,11 @@ const totp = ref('')
 const loading = ref(false)
 const error = ref('')
 const needsRegistration = ref(false)
+const totpAvailable = ref(false)
+const isDark = ref(true)
+
+let totpStatusTimer = null
+let totpStatusSeq = 0
 
 const localeOptions = computed(() =>
   i18n.localeOptions.map((locale) => {
@@ -115,8 +125,19 @@ const selectedLocale = computed({
 })
 
 function switchMode(nextMode) {
+  if (nextMode === 'totp_only' && !totpAvailable.value) return
   mode.value = nextMode
   error.value = ''
+}
+
+function applyTheme(modeName) {
+  isDark.value = modeName !== 'light'
+  document.documentElement.classList.toggle('light', modeName === 'light')
+  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+}
+
+function toggleTheme() {
+  applyTheme(isDark.value ? 'light' : 'dark')
 }
 
 async function loadAuthStatus() {
@@ -126,6 +147,37 @@ async function loadAuthStatus() {
     needsRegistration.value = !!data.needsRegistration
   } catch {
     needsRegistration.value = false
+  }
+}
+
+async function checkTotpStatus(nextUsername = username.value) {
+  const currentUsername = String(nextUsername || '').trim()
+  const currentSeq = ++totpStatusSeq
+
+  if (!currentUsername) {
+    totpAvailable.value = false
+    if (mode.value === 'totp_only') mode.value = 'password'
+    return
+  }
+
+  try {
+    const res = await fetch('/api/auth/totp-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: currentUsername }),
+    })
+    const data = await res.json()
+
+    if (currentSeq !== totpStatusSeq) return
+
+    totpAvailable.value = !!data.totpEnabled
+    if (!totpAvailable.value && mode.value === 'totp_only') {
+      mode.value = 'password'
+    }
+  } catch {
+    if (currentSeq !== totpStatusSeq) return
+    totpAvailable.value = false
+    if (mode.value === 'totp_only') mode.value = 'password'
   }
 }
 
@@ -143,7 +195,7 @@ async function handleLogin() {
   error.value = ''
   try {
     await auth.login(username.value, password.value)
-    router.push('/')
+    await router.replace('/')
   } catch (e) {
     error.value = e.message
   } finally {
@@ -165,7 +217,7 @@ async function handleLoginTotp() {
   error.value = ''
   try {
     await auth.loginTotp(username.value, totp.value)
-    router.push('/')
+    await router.replace('/')
   } catch (e) {
     error.value = e.message
   } finally {
@@ -173,21 +225,51 @@ async function handleLoginTotp() {
   }
 }
 
+watch(username, (next) => {
+  if (totpStatusTimer) clearTimeout(totpStatusTimer)
+
+  const trimmed = String(next || '').trim()
+  if (!trimmed) {
+    totpAvailable.value = false
+    if (mode.value === 'totp_only') mode.value = 'password'
+    return
+  }
+
+  totpStatusTimer = setTimeout(() => {
+    checkTotpStatus(trimmed)
+  }, 220)
+})
+
 onMounted(() => {
   loadAuthStatus()
+  isDark.value = !document.documentElement.classList.contains('light')
+})
+
+onBeforeUnmount(() => {
+  if (totpStatusTimer) clearTimeout(totpStatusTimer)
 })
 </script>
 
 <style scoped>
 .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px}
-.login-card{width:100%;max-width:380px;padding:36px 28px}
+.login-card{width:100%;max-width:380px;padding:20px 28px 36px}
+.login-topbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:12px}
+.login-theme-btn{flex-shrink:0}
 .login-logo{font-size:44px;text-align:center;margin-bottom:12px}
 .login-title{font-size:21px;font-weight:700;text-align:center;margin-bottom:22px}
-.login-links{margin-bottom:18px;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:10px;font-size:13px}
+.login-links{margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px}
 .login-link-side{min-width:0}
 .login-link-left{justify-self:start}
 .login-link-right{justify-self:end;text-align:right}
-.login-lang-select{min-width:132px}
+.login-lang-select{min-width:0;max-width:132px;flex:1}
 .login-switch{margin-top:12px;text-align:center}
 .login-footer{margin-top:20px;text-align:center;font-size:12px;color:var(--text3)}
+
+@media (max-width: 480px){
+  .login-wrap{padding:14px}
+  .login-card{padding:18px 18px 28px}
+  .login-topbar{gap:6px}
+  .login-lang-select{max-width:104px;font-size:12px}
+  .login-links{font-size:12px;gap:10px}
+}
 </style>
