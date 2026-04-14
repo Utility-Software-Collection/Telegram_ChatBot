@@ -54,10 +54,13 @@
 
   <!-- Auth pages (login/register etc.) -->
   <div v-else class="main-content no-sidebar">
-    <div v-if="showAuthLanguageSelector" style="display:flex;justify-content:flex-end;margin-bottom:8px">
+    <div v-if="showAuthControls" class="auth-topbar">
       <select class="lang-select auth-lang-select" v-model="selectedLocale" :title="t('app.language')">
         <option v-for="opt in localeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
       </select>
+      <button class="btn-icon" @click="toggleTheme" :title="isDark ? t('app.toggleLight') : t('app.toggleDark')">
+        {{ isDark ? '☀️' : '🌙' }}
+      </button>
     </div>
     <RouterView />
   </div>
@@ -90,7 +93,7 @@ const selectedLocale = computed({
   set: (next) => i18n.setLocale(next),
 })
 
-const showAuthLanguageSelector = computed(() => route.path !== '/login')
+const showAuthControls = computed(() => route.path !== '/login')
 
 const navItems = computed(() => [
   { to: '/',              icon: '📊', label: t('nav.dashboard') },
@@ -103,10 +106,14 @@ const navItems = computed(() => [
 
 function closeSidebar() { sidebarOpen.value = false }
 
-function toggleTheme() {
-  isDark.value = !isDark.value
-  document.documentElement.classList.toggle('light', !isDark.value)
+function applyTheme(mode) {
+  isDark.value = mode !== 'light'
+  document.documentElement.classList.toggle('light', mode === 'light')
   localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+}
+
+function toggleTheme() {
+  applyTheme(isDark.value ? 'light' : 'dark')
 }
 
 let syncLocaleTimer = null
@@ -125,9 +132,11 @@ async function handleLogout() {
 
 onMounted(() => {
   const saved = localStorage.getItem('theme')
-  if (saved === 'light') {
-    isDark.value = false
-    document.documentElement.classList.add('light')
+  if (saved === 'light' || saved === 'dark') {
+    applyTheme(saved)
+  } else {
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+    applyTheme(prefersDark ? 'dark' : 'light')
   }
   i18n.setLocale(i18n.locale)
   document.title = t('app.title')

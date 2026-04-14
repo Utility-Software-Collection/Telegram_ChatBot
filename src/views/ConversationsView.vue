@@ -58,8 +58,8 @@
         <div class="msg-list" ref="msgRef">
           <div v-if="loadingMsgs" class="flex-center" style="padding:30px"><div class="spinner"></div></div>
           <template v-else>
-            <div v-if="!msgs.length" class="empty">{{ t('conv.msgEmpty') }}</div>
-            <div v-for="m in msgs" :key="m.id" class="msg-wrap" :class="m.direction">
+            <div v-if="!dedupedMsgs.length" class="empty">{{ t('conv.msgEmpty') }}</div>
+            <div v-for="m in dedupedMsgs" :key="m.id" class="msg-wrap" :class="m.direction">
               <div class="msg-bubble">
                 <div class="msg-type-badge" v-if="m.message_type && m.message_type !== 'text'">
                   {{ typeLabel(m.message_type) }}
@@ -101,6 +101,32 @@ const filtered = computed(() => {
   return convs.value.filter(c =>
     String(c.user_id).includes(q) || (c.first_name || '').toLowerCase().includes(q) || (c.username || '').toLowerCase().includes(q),
   )
+})
+
+const dedupedMsgs = computed(() => {
+  const out = []
+  for (const m of msgs.value) {
+    const prev = out[out.length - 1]
+    if (!prev) {
+      out.push(m)
+      continue
+    }
+
+    const sameDirection = prev.direction === m.direction
+    const sameType = (prev.message_type || 'text') === (m.message_type || 'text')
+    const sameContent = String(prev.content || '') === String(m.content || '')
+    const prevTime = new Date(prev.created_at || 0).getTime()
+    const nextTime = new Date(m.created_at || 0).getTime()
+    const closeInTime = Number.isFinite(prevTime) && Number.isFinite(nextTime) && Math.abs(nextTime - prevTime) <= 1500
+
+    if (sameDirection && sameType && sameContent && closeInTime) {
+      out[out.length - 1] = m
+      continue
+    }
+
+    out.push(m)
+  }
+  return out
 })
 
 async function loadConvs() {

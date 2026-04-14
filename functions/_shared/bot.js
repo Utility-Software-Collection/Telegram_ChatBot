@@ -54,6 +54,8 @@ function getInlineKbMsgDeleteSeconds(settings) {
   return parseBoundedInt(settings?.INLINE_KB_MSG_DELETE_SECONDS || settings?.USER_MSG_DELETE_SECONDS || '15', 15, 0, 25);
 }
 
+const ADMIN_EDIT_SYNC_WINDOW_MS = 3 * 60 * 1000;
+
 const ADMIN_NUMERIC_INPUT_FIELDS = {
   VERIFICATION_TIMEOUT: { min: 60, max: 900, unit: 's', labelKey: 'panel.timeout', defaultValue: 300 },
   MAX_VERIFICATION_ATTEMPTS: { min: 1, max: 10, unit: '', labelKey: 'panel.attempts', defaultValue: 3 },
@@ -193,6 +195,35 @@ async function shouldProcessMessageOnce(kv, scope, chatId, msgId, ttlSeconds = 2
   return lock.value !== false;
 }
 
+function getAdminForwardMapKey(chatId, msgId) {
+  return `map:admin_forward:${chatId}:${msgId}`;
+}
+
+async function getAdminForwardMap(kv, chatId, msgId) {
+  if (!kv || !chatId || !msgId) return null;
+  const raw = await kv.get(getAdminForwardMapKey(chatId, msgId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function saveAdminForwardMap(kv, chatId, msgId, data) {
+  if (!kv || !chatId || !msgId || !data) return;
+  await kv.put(
+    getAdminForwardMapKey(chatId, msgId),
+    JSON.stringify(data),
+    { expirationTtl: 86400 },
+  );
+}
+
+async function deleteAdminForwardMap(kv, chatId, msgId) {
+  if (!kv || !chatId || !msgId) return;
+  await kv.delete(getAdminForwardMapKey(chatId, msgId)).catch(() => {});
+}
+
 async function withUserLock(kv, userLockId, fn, { ttlSeconds = 60, retries = 8, waitMs = 120 } = {}) {
   const lockKey = `lock:user:${userLockId}`;
   const ttl = Math.max(60, ttlSeconds);
@@ -243,7 +274,8 @@ async function getOrCreateThread(tg, db, user, groupId, kv, t) {
 
   await kv.put(lockKey, '1', { expirationTtl: 60 }); // CF KV minimum TTL is 60s
   try {
-    const topicName = (name(user) || t('thread.userTopic', { id: user.id })).slice(0, 128);
+    const baseTopicName = name(user) || t('thread.userTopic', { id: user.id });
+    const topicName = `${baseTopicName} [${user.id}]`.slice(0, 128);
     const res = await tg.createTopic({ chatId: groupId, name: topicName });
     if (!res.ok) { console.error('createTopic failed:', res); return null; }
     const tid = res.result.message_thread_id;
@@ -371,6 +403,7 @@ export async function processUpdate(update, env) {
     const tg  = new TG(settings.BOT_TOKEN);
     const ctx = { tg, db, kv: env.KV, settings, baseUrl: env.baseUrl || '', t, waitUntil: env.waitUntil };
     if (update.message)              await handleMsg(update.message, ctx);
+    else if (update.edited_message)  await handleEditedMsg(update.edited_message, ctx);
     else if (update.callback_query)  await handleCb(update.callback_query, ctx);
   } catch (e) { console.error('processUpdate:', e); }
 }
@@ -395,7 +428,19 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
     if (!shouldForward) return;
 
     // Use copyMessage to preserve ALL formatting (code, monospace, quotes, media)
-    await tg.copyMsg({ chatId: target.user_id, fromChatId: msg.chat.id, msgId: msg.message_id });
+    const forwardRes = await tg.copyMsg({ chatId: target.user_id, fromChatId: msg.chat.id, msgId: msg.message_id });
+    if (!forwardRes?.ok) {
+      console.error('admin topic forward failed:', forwardRes);
+      return;
+    }
+
+    await saveAdminForwardMap(kv, msg.chat.id, msg.message_id, {
+      userChatId: target.user_id,
+      userMsgId: forwardRes.result?.message_id,
+      threadId: msg.message_thread_id,
+      forwardedAt: Date.now(),
+    });
+
     await db.addMsg({ userId: target.user_id, direction: 'outgoing', content: msg.text || msg.caption || t('content.media'), messageType: msgType(msg) });
     return;
   }
@@ -610,6 +655,58 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
   }
 }
 
+async function handleEditedMsg(msg, { tg, db, kv, settings }) {
+  if (!msg) return;
+  const user = msg.from;
+  if (!user || user.is_bot) return;
+
+  const groupId = parseInt(settings.FORUM_GROUP_ID, 10);
+  const adminIds = parseAdminIds(settings.ADMIN_IDS);
+
+  if (msg.chat.id !== groupId || !msg.is_topic_message) return;
+  if (!adminIds.includes(user.id)) return;
+
+  const target = await db.getUserByThread(msg.message_thread_id);
+  if (!target) return;
+
+  const mapped = await getAdminForwardMap(kv, msg.chat.id, msg.message_id);
+  if (!mapped?.userChatId || !mapped?.userMsgId) return;
+  if (Date.now() - Number(mapped.forwardedAt || 0) > ADMIN_EDIT_SYNC_WINDOW_MS) return;
+
+  const shouldSync = await shouldProcessMessageOnce(
+    kv,
+    'admin-topic-edit',
+    msg.chat.id,
+    `${msg.message_id}:${msg.edit_date || msg.date || 0}`,
+  );
+  if (!shouldSync) return;
+
+  await tg.deleteMsg({ chatId: mapped.userChatId, msgId: mapped.userMsgId }).catch(() => {});
+
+  if (msg.text?.startsWith('/')) {
+    await deleteAdminForwardMap(kv, msg.chat.id, msg.message_id);
+    return;
+  }
+
+  const resendRes = await tg.copyMsg({
+    chatId: mapped.userChatId,
+    fromChatId: msg.chat.id,
+    msgId: msg.message_id,
+  });
+
+  if (!resendRes?.ok) {
+    console.error('admin topic edited message resend failed:', resendRes);
+    return;
+  }
+
+  await saveAdminForwardMap(kv, msg.chat.id, msg.message_id, {
+    ...mapped,
+    userChatId: mapped.userChatId,
+    userMsgId: resendRes.result?.message_id,
+    threadId: msg.message_thread_id,
+  });
+}
+
 async function handleAdminPrivateMsg(msg, user, { tg, db, kv, settings, groupId, t, waitUntil }) {
   const protectedAdminIds = new Set(parseAdminIds(settings.ADMIN_IDS).map(Number));
 
@@ -724,8 +821,19 @@ async function handleAdminPrivateMsg(msg, user, { tg, db, kv, settings, groupId,
   const shouldForward = await shouldProcessMessageOnce(kv, 'admin-private-notify', msg.chat.id, msg.message_id);
   if (!shouldForward) return;
 
-  // Always forward admin private messages to the forum/group.
-  const fwdRes = await tg.copyMsg({ chatId: groupId, fromChatId: msg.chat.id, msgId: msg.message_id });
+  const adminThreadId = await getOrCreateThread(tg, db, user, groupId, kv, t);
+  if (!adminThreadId) {
+    if (settings.ADMIN_NOTIFY_ENABLED === 'true') await sendPanel();
+    return;
+  }
+
+  // Always forward admin private messages to the admin's dedicated topic.
+  const fwdRes = await tg.copyMsg({
+    chatId: groupId,
+    fromChatId: msg.chat.id,
+    msgId: msg.message_id,
+    threadId: adminThreadId,
+  });
   if (fwdRes.ok) {
     await tg.sendMsg({ chatId: user.id, text: t('admin.forwarded') });
   } else if (settings.ADMIN_NOTIFY_ENABLED === 'true') {

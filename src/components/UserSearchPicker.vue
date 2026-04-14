@@ -54,16 +54,44 @@ const open = ref(false)
 const root = ref(null)
 
 let timer = null
+let searchSeq = 0
+
 function onInput() {
   emit('update:modelValue', query.value)
   clearTimeout(timer)
-  if (!query.value) { results.value = []; return }
-  timer = setTimeout(doSearch, 300)
+
+  const trimmed = String(query.value || '').trim()
+  if (!trimmed) {
+    results.value = []
+    loading.value = false
+    open.value = false
+    return
+  }
+
+  open.value = true
+  timer = setTimeout(() => doSearch(trimmed), 250)
 }
-async function doSearch() {
+
+async function doSearch(keyword = String(query.value || '').trim()) {
+  if (!keyword) {
+    results.value = []
+    loading.value = false
+    return
+  }
+
+  const currentSeq = ++searchSeq
   loading.value = true
-  try { results.value = await api.get(`/api/users/search?q=${encodeURIComponent(query.value)}`) } catch { results.value = [] }
-  finally { loading.value = false }
+
+  try {
+    const data = await api.get(`/api/users/search?q=${encodeURIComponent(keyword)}`)
+    if (currentSeq === searchSeq && keyword === String(query.value || '').trim()) {
+      results.value = data
+    }
+  } catch {
+    if (currentSeq === searchSeq) results.value = []
+  } finally {
+    if (currentSeq === searchSeq) loading.value = false
+  }
 }
 function select(u) {
   query.value = String(u.user_id)
@@ -79,7 +107,11 @@ watch(() => props.modelValue, (v) => {
 })
 
 onMounted(() => document.addEventListener('mousedown', onClickOutside))
-onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside))
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onClickOutside)
+  clearTimeout(timer)
+  searchSeq++
+})
 </script>
 
 <style scoped>

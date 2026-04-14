@@ -18,7 +18,7 @@
       <div v-if="saveErr" class="alert alert-error">{{ saveErr }}</div>
 
       <!-- Bot 配置 -->
-      <div class="card section mb-2">
+      <div class="card section settings-card">
         <h3 class="sec-title">🤖 {{ t('settings.section.bot') }}</h3>
         <div class="form-group">
           <label>{{ t('settings.config.botToken') }} <span class="req">*</span></label>
@@ -84,7 +84,7 @@
       </div>
 
       <!-- Webhook -->
-      <div class="card section mb-2">
+      <div class="card section settings-card">
         <h3 class="sec-title">🔗 {{ t('settings.section.webhook') }}</h3>
         <div class="form-group">
           <label>{{ t('settings.webhookUrl') }}</label>
@@ -100,7 +100,7 @@
       </div>
 
       <!-- 验证配置 -->
-      <div class="card section mb-2">
+      <div class="card section settings-card">
         <h3 class="sec-title">🔐 {{ t('settings.section.verify') }}</h3>
         <div class="toggle-row">
           <div>
@@ -136,7 +136,7 @@
       </div>
 
       <!-- 功能配置 -->
-      <div class="card section mb-2">
+      <div class="card section settings-card">
         <h3 class="sec-title">🔧 {{ t('settings.section.feature') }}</h3>
         <div class="toggle-row">
           <div>
@@ -195,7 +195,7 @@
       </div>
 
       <!-- 欢迎消息 -->
-      <div class="card section mb-2">
+      <div class="card section settings-card">
         <h3 class="sec-title">👋 {{ t('settings.section.welcome') }}</h3>
         <div class="toggle-row">
           <div class="toggle-label">{{ t('settings.welcome.enable') }}</div>
@@ -208,7 +208,7 @@
       </div>
 
       <!-- 数据库切换 -->
-      <div class="card section mb-2">
+      <div class="card section settings-card">
         <h3 class="sec-title">🗄️ {{ t('settings.section.storage') }}</h3>
         <div class="db-status">
           <div>
@@ -403,5 +403,6 @@ onMounted(load)
 .admin-tag button{background:none;border:none;color:var(--danger);cursor:pointer;font-size:12px;padding:0 2px}
 .db-status{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .danger-zone{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.settings-card{margin-bottom:18px}
 .page{max-width:720px;margin:0 auto}
 </style>
