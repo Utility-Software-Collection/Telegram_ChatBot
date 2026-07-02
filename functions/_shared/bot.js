@@ -1808,10 +1808,11 @@ async function handleAdmCb(q, action, { tg, db, kv, settings, chatId, msgId, adm
       hcaptcha: t('panel.cap.hcaptcha'),
     };
     const cur = settings.CAPTCHA_TYPE || 'math';
-    const kb = all.map(type => [{
+    const btns = all.map(type => ({
       text: (type === cur ? '✅ ' : '') + (labelMap[type] || type),
       callback_data: `adm:ct:set:${type}`,
-    }]);
+    }));
+    const kb = rowsN(btns, 2, b => b);
     kb.push([{ text: t('cb.back'), callback_data: 'adm:cfg' }]);
     await editUserText({ tg, settings, waitUntil, chatId, msgId, text: t('panel.captchaType') + '：', kb });
     await tg.answerCb({ id: q.id }).catch(() => {});
