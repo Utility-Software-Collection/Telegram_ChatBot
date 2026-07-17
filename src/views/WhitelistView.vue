@@ -17,7 +17,12 @@
         {{ t('whitelist.addUser') }}
       </h3>
       <div class="quick-row">
-        <UserSearchPicker v-model="addId" :placeholder="t('whitelist.search')" @selected="u => addId = String(u.user_id)" style="flex:1" />
+        <UserSearchPicker
+          v-model="addId"
+          :placeholder="t('whitelist.search')"
+          @selected="onPickAddUser"
+          style="flex:1"
+        />
         <input v-model="addReason" :placeholder="t('whitelist.reasonOptional')" style="flex:1" />
         <button class="btn-primary btn-sm" :disabled="!addId || adding" @click="doAdd">
           <span v-if="adding" class="spinner"></span>
@@ -25,7 +30,6 @@
           {{ t('whitelist.add') }}
         </button>
       </div>
-      <div v-if="addMsg" class="alert mt-1" :class="addOk ? 'alert-success' : 'alert-error'">{{ addMsg }}</div>
       <div class="form-hint mt-1">{{ t('whitelist.tip') }}</div>
     </div>
 
@@ -59,15 +63,22 @@
               <tr v-for="u in users" :key="u.user_id">
                 <td>
                   <div class="user-cell">
-                    <div class="u-ava">{{ (u.first_name || u.username || '?')[0].toUpperCase() }}</div>
+                    <div class="u-ava">
+                      <img v-if="avatars[u.user_id]" :src="avatars[u.user_id]" class="ava-img" @error="avatars[u.user_id] = ''" />
+                      <span v-else>{{ (u.first_name || u.username || '?')[0].toUpperCase() }}</span>
+                    </div>
                     <div class="user-cell-line">
-                      <span class="u-name">{{ u.first_name }} {{ u.last_name }}</span>
+                      <span class="u-name">{{ formatDisplayName(u) }}</span>
                       <span class="user-cell-sep">·</span>
                       <span class="user-cell-meta">{{ u.username ? '@' + u.username : '—' }}</span>
                     </div>
                   </div>
                 </td>
-                <td class="hide-mobile"><code class="user-id">{{ u.user_id }}</code></td>
+                <td class="hide-mobile">
+                  <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(u.user_id)">
+                    <code class="user-id">{{ u.user_id }}</code>
+                  </button>
+                </td>
                 <td class="text-muted text-sm">{{ u.reason || '—' }}</td>
                 <td class="hide-mobile text-muted text-sm">{{ fmtDate(u.created_at) }}</td>
                 <td>
@@ -110,41 +121,118 @@ import AppIcon from '../components/AppIcon.vue'
 import api from '../stores/api.js'
 import UserSearchPicker from '../components/UserSearchPicker.vue'
 import { useI18nStore } from '../stores/i18n'
+import { useDialog } from '../stores/dialog.js'
+import { useToast } from '../stores/toast.js'
 
 const i18n = useI18nStore()
 const t = i18n.t
+const dialog = useDialog()
+const toast = useToast()
 
 const users = ref([]), total = ref(0), page = ref(1), pageSize = 20
 const loading = ref(true)
-const addId = ref(''), addReason = ref(''), addMsg = ref(''), addOk = ref(true), adding = ref(false)
+const addId = ref(''), addReason = ref(''), adding = ref(false)
+const avatars = ref({})
+const addPickedUser = ref(null)
+
+function formatDisplayName(u) {
+  if (!u) return ''
+  const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+  return name || (u.username ? `@${u.username}` : String(u.user_id))
+}
+
+function formatConfirmName(uOrId) {
+  const u = (uOrId && typeof uOrId === 'object')
+    ? uOrId
+    : (users.value.find(x => String(x.user_id) === String(uOrId))
+      || (addPickedUser.value && String(addPickedUser.value.user_id) === String(uOrId) ? addPickedUser.value : null)
+      || { user_id: uOrId })
+  if (u.username) return `@${u.username}`
+  const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+  return name || String(u.user_id || uOrId || '')
+}
+
+function loadAvatar(uid) {
+  if (!uid || avatars.value[uid]) return
+  const img = new Image()
+  img.onload = () => { avatars.value[uid] = `/api/users/${uid}/avatar` }
+  img.onerror = () => {}
+  img.src = `/api/users/${uid}/avatar`
+}
+
+function onPickAddUser(u) {
+  addId.value = String(u.user_id)
+  addPickedUser.value = u
+}
+
+async function copyTelegramId(id) {
+  const val = String(id || '').trim()
+  if (!val) return
+  try {
+    if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(val)
+    else {
+      const ta = document.createElement('textarea')
+      ta.value = val
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success(t('users.flash.copySuccess', { label: t('users.copyUid') }))
+  } catch (e) {
+    toast.error(t('users.flash.copyFailed', { err: e?.message || 'unknown' }))
+  }
+}
 
 async function load() {
   loading.value = true
   try {
     const d = await api.get(`/api/whitelist?page=${page.value}`)
     users.value = d.users; total.value = d.total
+    for (const u of users.value) loadAvatar(u.user_id)
   } finally { loading.value = false }
 }
 
 async function doAdd() {
   if (!addId.value) return
-  adding.value = true; addMsg.value = ''
+  const ok = await dialog.confirm({
+    title: t('users.addWhitelist'),
+    message: t('whitelist.addConfirm', { name: formatConfirmName(addPickedUser.value || addId.value) }),
+    confirmText: t('whitelist.add'),
+  })
+  if (!ok) return
+  adding.value = true
   try {
     await api.post(`/api/whitelist/${addId.value}`, { reason: addReason.value })
-    addMsg.value = t('whitelist.addSuccess', { id: addId.value }); addOk.value = true
-    addId.value = ''; addReason.value = ''
+    toast.success(t('whitelist.addSuccess', { id: addId.value }))
+    addId.value = ''; addReason.value = ''; addPickedUser.value = null
     await load()
-  } catch (e) { addMsg.value = e.message; addOk.value = false }
-  finally { adding.value = false; setTimeout(() => addMsg.value = '', 4000) }
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    adding.value = false
+  }
 }
 
 async function doRemove(u) {
-  if (!confirm(t('whitelist.removeConfirm', { id: u.user_id }))) return
+  const ok = await dialog.confirm({
+    title: t('whitelist.remove'),
+    message: t('whitelist.removeConfirm', { name: formatConfirmName(u) }),
+    danger: true,
+    confirmText: t('whitelist.remove'),
+  })
+  if (!ok) return
   try {
     await api.delete(`/api/whitelist/${u.user_id}`)
     users.value = users.value.filter(x => x.user_id !== u.user_id)
     total.value--
-  } catch (e) { alert(e.message) }
+    toast.success(t('users.flash.removedWhitelist'))
+  } catch (e) {
+    toast.error(e.message)
+  }
 }
 
 function fmtDate(ts) {
@@ -166,8 +254,35 @@ onMounted(load)
 .u-name{min-width:0;font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis}
 .user-cell-meta{min-width:0;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis}
 .user-cell-sep{color:var(--text3);flex-shrink:0}
-.u-ava{width:32px;height:32px;border-radius:50%;flex-shrink:0;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
-.user-id{font-size:12px}
+.u-ava{width:32px;height:32px;border-radius:50%;flex-shrink:0;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;overflow:hidden}
+.ava-img{width:100%;height:100%;object-fit:cover}
+.user-id{
+  font-size:12px;
+  display:inline-block;
+  background:transparent!important;
+  border-radius:0;
+  padding:0;
+  letter-spacing:.02em;
+  font-variant-numeric:tabular-nums;
+}
+.id-copy{
+  appearance:none;border:1px solid var(--border);background:var(--bg3);padding:5px 10px;margin:0;cursor:pointer;
+  color:var(--text2);font:inherit;display:inline-flex;align-items:center;justify-content:center;
+  min-width:118px;border-radius:8px;transition:var(--tr);line-height:1.2;
+}
+.id-copy:hover{
+  color:var(--accent);border-color:rgba(79,142,247,.35);background:var(--accent-dim);
+}
+.id-copy:hover code{color:var(--accent)}
+.id-copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+:global(:root.glass) .id-copy{
+  background:rgba(255,255,255,.06);
+  border-color:rgba(255,255,255,.12);
+}
+:global(:root.light.glass) .id-copy{
+  background:rgba(15,23,42,.04);
+  border-color:rgba(148,163,184,.28);
+}
 @media (max-width:768px){
   .page{max-width:100%}
   .quick-row > *{min-width:0}

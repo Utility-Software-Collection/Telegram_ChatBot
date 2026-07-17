@@ -19,7 +19,6 @@
         <label>{{ t('profile.username.new') }}</label>
         <input v-model="newUsername" :placeholder="t('profile.username.ph')" autocomplete="username" />
       </div>
-      <div v-if="unameMsg" class="alert" :class="unameOk ? 'alert-success' : 'alert-error'">{{ unameMsg }}</div>
       <button class="btn-primary" @click="changeUsername" :disabled="unameLoading">
         <span v-if="unameLoading" class="spinner"></span>{{ t('profile.username.submit') }}
       </button>
@@ -38,7 +37,6 @@
         <label>{{ t('profile.password.new') }}</label>
         <input type="password" v-model="newPw" :placeholder="t('profile.password.ph')" autocomplete="new-password" />
       </div>
-      <div v-if="pwMsg" class="alert" :class="pwOk ? 'alert-success' : 'alert-error'">{{ pwMsg }}</div>
       <button class="btn-primary" @click="changePassword" :disabled="pwLoading">
         <span v-if="pwLoading" class="spinner"></span>{{ t('profile.password.submit') }}
       </button>
@@ -82,8 +80,6 @@
           <span v-if="totpLoading" class="spinner"></span>{{ t('profile.2fa.disable') }}
         </button>
       </div>
-
-      <div v-if="totpMsg" class="alert mt-2" :class="totpOk ? 'alert-success' : 'alert-error'">{{ totpMsg }}</div>
     </div>
   </div>
 </template>
@@ -94,34 +90,36 @@ import AppIcon from '../components/AppIcon.vue'
 import api from '../stores/api.js'
 import { useAuthStore } from '../stores/auth.js'
 import { useI18nStore } from '../stores/i18n'
+import { useDialog } from '../stores/dialog.js'
+import { useToast } from '../stores/toast.js'
 
 const auth = useAuthStore()
 const i18n = useI18nStore()
 const t = i18n.t
+const dialog = useDialog()
+const toast = useToast()
 
-const newUsername = ref(''), unameMsg = ref(''), unameOk = ref(true), unameLoading = ref(false)
-const oldPw = ref(''), newPw = ref(''), pwMsg = ref(''), pwOk = ref(true), pwLoading = ref(false)
+const newUsername = ref(''), unameLoading = ref(false)
+const oldPw = ref(''), newPw = ref(''), pwLoading = ref(false)
 const totpEnabled = ref(false), totpSecret = ref(''), qrUrl = ref(''), totpToken = ref('')
-const totpMsg = ref(''), totpOk = ref(true), totpLoading = ref(false)
+const totpLoading = ref(false)
 
-function flash(msgRef, okRef, msg, ok = true, timeout = 4000) {
-  msgRef.value = msg
-  okRef.value = ok
-  if (timeout) setTimeout(() => (msgRef.value = ''), timeout)
+function flash(msg, ok = true) {
+  if (ok) toast.success(msg)
+  else toast.error(msg)
 }
 
 async function changeUsername() {
   if (!newUsername.value) return
   unameLoading.value = true
-  unameMsg.value = ''
   try {
     await api.put('/api/profile/username', { newUsername: newUsername.value })
-    flash(unameMsg, unameOk, t('profile.flash.usernameUpdated'))
+    flash(t('profile.flash.usernameUpdated'))
     auth.username = newUsername.value
     localStorage.setItem('username', newUsername.value)
     newUsername.value = ''
   } catch (e) {
-    flash(unameMsg, unameOk, e.message, false)
+    flash(e.message, false)
   } finally {
     unameLoading.value = false
   }
@@ -130,14 +128,13 @@ async function changeUsername() {
 async function changePassword() {
   if (!oldPw.value || !newPw.value) return
   pwLoading.value = true
-  pwMsg.value = ''
   try {
     await api.put('/api/profile/password', { oldPassword: oldPw.value, newPassword: newPw.value })
-    flash(pwMsg, pwOk, t('profile.flash.passwordUpdated'))
+    flash(t('profile.flash.passwordUpdated'))
     oldPw.value = ''
     newPw.value = ''
   } catch (e) {
-    flash(pwMsg, pwOk, e.message, false)
+    flash(e.message, false)
   } finally {
     pwLoading.value = false
   }
@@ -145,13 +142,12 @@ async function changePassword() {
 
 async function setup2FA() {
   totpLoading.value = true
-  totpMsg.value = ''
   try {
     const d = await api.post('/api/profile/2fa/setup', { enable: true })
     totpSecret.value = d.secret
     qrUrl.value = d.qrcode
   } catch (e) {
-    flash(totpMsg, totpOk, e.message, false)
+    flash(e.message, false)
   } finally {
     totpLoading.value = false
   }
@@ -160,30 +156,34 @@ async function setup2FA() {
 async function verify2FA() {
   if (!totpToken.value) return
   totpLoading.value = true
-  totpMsg.value = ''
   try {
     await api.post('/api/profile/2fa/verify', { token: totpToken.value, secret: totpSecret.value })
     totpEnabled.value = true
     totpSecret.value = ''
     totpToken.value = ''
-    flash(totpMsg, totpOk, t('profile.flash.2faEnabled'))
+    flash(t('profile.flash.2faEnabled'))
   } catch (e) {
-    flash(totpMsg, totpOk, e.message, false)
+    flash(e.message, false)
   } finally {
     totpLoading.value = false
   }
 }
 
 async function disable2FA() {
-  if (!confirm(t('profile.2fa.disableConfirm'))) return
+  const ok = await dialog.confirm({
+    title: t('profile.2fa.disable'),
+    message: t('profile.2fa.disableConfirm'),
+    danger: true,
+    confirmText: t('profile.2fa.disable'),
+  })
+  if (!ok) return
   totpLoading.value = true
-  totpMsg.value = ''
   try {
     await api.post('/api/profile/2fa/setup', { enable: false })
     totpEnabled.value = false
-    flash(totpMsg, totpOk, t('profile.flash.2faDisabled'))
+    flash(t('profile.flash.2faDisabled'))
   } catch (e) {
-    flash(totpMsg, totpOk, e.message, false)
+    flash(e.message, false)
   } finally {
     totpLoading.value = false
   }

@@ -136,6 +136,9 @@
     </div>
     <RouterView />
   </div>
+
+  <AppDialog />
+  <AppToast />
 </template>
 
 <script setup>
@@ -144,6 +147,8 @@ import { RouterLink, RouterView, useRouter, useRoute } from 'vue-router'
 import { AUTH_EXPIRED_EVENT, useAuthStore } from './stores/auth'
 import { useI18nStore } from './stores/i18n'
 import AppIcon from './components/AppIcon.vue'
+import AppDialog from './components/AppDialog.vue'
+import AppToast from './components/AppToast.vue'
 import api from './stores/api'
 
 const auth = useAuthStore()

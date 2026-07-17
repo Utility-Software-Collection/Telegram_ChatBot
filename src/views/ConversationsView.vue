@@ -49,7 +49,7 @@
           <div style="flex:1;min-width:0">
             <div class="hdr-name">{{ selUser.first_name }} {{ selUser.last_name }}</div>
             <div class="text-muted text-sm" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-              ID: <code>{{ selUser.user_id }}</code>{{ selUser.username ? ' · @' + selUser.username : '' }}
+              ID: <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(selUser.user_id)"><code>{{ selUser.user_id }}</code></button>{{ selUser.username ? ' · @' + selUser.username : '' }}
             </div>
           </div>
           <span class="badge" :class="selUser.is_blocked ? 'badge-danger' : 'badge-success'">
@@ -100,11 +100,15 @@ import { useRoute } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import api from '../stores/api.js'
 import { useI18nStore } from '../stores/i18n'
+import { useDialog } from '../stores/dialog.js'
+import { useToast } from '../stores/toast.js'
 import { getLatestTimestamp, mergeByKey, readLocalCache, writeLocalCache } from '../stores/local-cache.js'
 
 const route = useRoute()
 const i18n = useI18nStore()
 const t = i18n.t
+const dialog = useDialog()
+const toast = useToast()
 
 const convs = ref([]), msgs = ref([]), selUser = ref(null), selId = ref(null)
 const search = ref(''), loadingList = ref(true), loadingMsgs = ref(false), msgRef = ref(null)
@@ -231,29 +235,77 @@ async function deleteConv() {
   if (!selUser.value) return
   const uid = selUser.value.user_id
   const name = selUser.value.first_name || uid
-  if (!confirm(t('conv.deleteConfirm', { name }))) return
+  const ok = await dialog.confirm({
+    title: t('conv.deleteTitle'),
+    message: t('conv.deleteConfirm', { name }),
+    danger: true,
+    confirmText: t('common.confirm'),
+  })
+  if (!ok) return
   try {
     const r = await api.delete(`/api/conversations/${uid}`)
     convs.value = convs.value.filter(c => c.user_id !== uid)
     writeLocalCache(CONV_LIST_CACHE_KEY, convs.value)
     selUser.value = null; selId.value = null; msgs.value = []
     mobileView.value = 'list'
-    if (r.reVerifyRequired) alert(t('conv.deleteSuccessReverify'))
-    else alert(t('conv.deleteSuccessNoReverify'))
-  } catch (e) { alert(t('conv.deleteFailed', { err: e.message })) }
+    toast.success(r.reVerifyRequired ? t('conv.deleteSuccessReverify') : t('conv.deleteSuccessNoReverify'))
+  } catch (e) {
+    toast.error(t('conv.deleteFailed', { err: e.message }))
+  }
 }
 
 async function blockUser() {
-  const r = prompt(t('conv.blockReasonPrompt')) ?? ''
+  const r = await dialog.prompt({
+    title: t('users.blockUser'),
+    message: t('conv.blockReasonPrompt'),
+    defaultValue: '',
+  })
   if (r === null) return
   await api.put(`/api/users/${selUser.value.user_id}/block`, { reason: r, permanent: true })
   selUser.value.is_blocked = 1
   updateConv(selUser.value.user_id, { is_blocked: 1 })
+  toast.success(t('users.flash.blocked'))
 }
 async function unblockUser() {
+  const ok = await dialog.confirm({
+    title: t('users.unblockUser'),
+    message: t('users.unblockConfirm', { name: formatConfirmName(selUser.value) }),
+    confirmText: t('users.unblock'),
+  })
+  if (!ok) return
   await api.put(`/api/users/${selUser.value.user_id}/unblock`, {})
   selUser.value.is_blocked = 0
   updateConv(selUser.value.user_id, { is_blocked: 0 })
+  toast.success(t('users.flash.unblocked'))
+}
+
+function formatConfirmName(u) {
+  if (!u) return ''
+  if (u.username) return `@${u.username}`
+  const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+  return name || String(u.user_id || '')
+}
+
+async function copyTelegramId(id) {
+  const val = String(id || '').trim()
+  if (!val) return
+  try {
+    if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(val)
+    else {
+      const ta = document.createElement('textarea')
+      ta.value = val
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success(t('users.flash.copySuccess', { label: t('users.copyUid') }))
+  } catch (e) {
+    toast.error(t('users.flash.copyFailed', { err: e?.message || 'unknown' }))
+  }
 }
 function updateConv(uid, patch) {
   const i = convs.value.findIndex(c => c.user_id === uid)
@@ -374,6 +426,7 @@ onMounted(async () => {
 }
 .hdr-ava{width:38px;height:38px;border-radius:50%;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0;overflow:hidden}
 .hdr-name{font-weight:600;font-size:14px}
+/* id-copy 样式由全局 style.css 统一提供 */
 .msg-list{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
 .msg-wrap{display:flex}
 .msg-wrap.incoming{justify-content:flex-start}

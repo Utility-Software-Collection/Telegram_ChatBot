@@ -191,6 +191,10 @@
       <path d="M14.5 6l-6 6 6 6" />
     </template>
 
+    <template v-else-if="name === 'chevron-down'">
+      <path d="M6 9.5l6 6 6-6" />
+    </template>
+
     <template v-else-if="name === 'check'">
       <path d="M5.5 12.5l4 4 9-9" />
     </template>

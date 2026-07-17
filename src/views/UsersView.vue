@@ -88,16 +88,9 @@
                 <td><input type="checkbox" :checked="selected.includes(u.user_id)" @change="toggleSelect(u.user_id)" class="cb" /></td>
                 <td>
                   <div class="user-cell" :class="{ 'is-blocked': !!u.is_blocked, 'is-wl': !!wlMap[u.user_id] && !u.is_blocked }" @click="openDetail(u)">
-                    <div class="u-ava" :class="{ blocked: u.is_blocked, wl: !!wlMap[u.user_id] && !u.is_blocked }">
+                    <div class="u-ava" :class="{ blocked: u.is_blocked }">
                       <img v-if="avatars[u.user_id]" :src="avatars[u.user_id]" class="ava-img" @error="avatars[u.user_id] = ''" />
                       <span v-else>{{ (u.first_name || u.username || '?')[0].toUpperCase() }}</span>
-                      <span
-                        v-if="wlMap[u.user_id] && !u.is_blocked"
-                        class="wl-hover-badge"
-                        :title="t('users.detail.whitelist')"
-                      >
-                        <AppIcon name="whitelist" :size="11" />
-                      </span>
                     </div>
                     <div class="user-summary">
                       <div class="u-name">
@@ -108,7 +101,11 @@
                     </div>
                   </div>
                 </td>
-                <td><code class="user-id">{{ u.user_id }}</code></td>
+                <td>
+                  <button type="button" class="id-copy" :title="t('common.copy')" @click.stop="copyText(String(u.user_id), t('users.copyUid'))">
+                    <code class="user-id">{{ u.user_id }}</code>
+                  </button>
+                </td>
                 <td>
                   <span class="badge" :class="u.is_blocked ? 'badge-danger' : 'badge-success'">
                     {{ u.is_blocked ? (u.is_permanent_block ? t('users.status.permanent') : t('users.status.blocked')) : t('users.status.normal') }}
@@ -123,7 +120,12 @@
                     <button v-else class="btn-success btn-sm" @click.stop="unblockOne(u)" :title="t('users.unblockUser')">
                       <AppIcon name="unblock" :size="14" />
                     </button>
-                    <button class="btn-ghost btn-sm" @click.stop="toggleWhitelistOne(u)" :title="t('users.addWhitelist')">
+                    <button
+                      class="btn-sm"
+                      :class="wlMap[u.user_id] ? 'btn-danger' : 'btn-ghost'"
+                      @click.stop="toggleWhitelistOne(u)"
+                      :title="wlMap[u.user_id] ? t('users.removeWhitelist') : t('users.addWhitelist')"
+                    >
                       <AppIcon name="whitelist" :size="14" />
                     </button>
                     <button class="btn-danger btn-sm" @click.stop="deleteOne(u)" :title="t('users.delete')">
@@ -178,7 +180,9 @@
         <div class="detail-grid">
           <div class="dr">
             <span class="dl">{{ t('users.detail.id') }}</span>
-            <code>{{ detailUser.user_id }}</code>
+            <button type="button" class="id-copy" :title="t('common.copy')" @click="copyText(String(detailUser.user_id), t('users.copyUid'))">
+              <code>{{ detailUser.user_id }}</code>
+            </button>
             <button class="btn-ghost btn-sm copy-btn" @click="copyText(String(detailUser.user_id), t('users.copyUid'))">{{ t('users.copy') }}</button>
           </div>
           <div class="dr"><span class="dl">{{ t('users.detail.status') }}</span>
@@ -214,7 +218,7 @@
             <AppIcon name="unblock" :size="14" />
             {{ t('users.unblock') }}
           </button>
-          <button class="btn-ghost" @click="toggleWlDetail">
+          <button class="btn-ghost" :class="{ 'btn-danger': detailIsWl }" @click="toggleWlDetail">
             <AppIcon name="whitelist" :size="14" />
             {{ detailIsWl ? t('users.removeWhitelist') : t('users.addWhitelist') }}
           </button>
@@ -239,10 +243,14 @@ import AppIcon from '../components/AppIcon.vue'
 import api from '../stores/api.js'
 import UserSearchPicker from '../components/UserSearchPicker.vue'
 import { useI18nStore } from '../stores/i18n'
+import { useDialog } from '../stores/dialog.js'
+import { useToast } from '../stores/toast.js'
 
 const route = useRoute()
 const i18n = useI18nStore()
 const t = i18n.t
+const dialog = useDialog()
+const toast = useToast()
 
 const users = ref([])
 const total = ref(0)
@@ -267,8 +275,19 @@ const allSelected = computed(() =>
 )
 
 function formatDisplayName(u) {
+  if (!u) return ''
   const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
-  return name || (u.username ? '@' + u.username : String(u.user_id))
+  return name || (u.username ? `@${u.username}` : String(u.user_id))
+}
+
+/** 确认弹窗用：优先 @username，否则 姓+名，最后才回退 ID */
+function formatConfirmName(uOrId, fallbackUser) {
+  const u = (uOrId && typeof uOrId === 'object')
+    ? uOrId
+    : (fallbackUser || users.value.find(x => String(x.user_id) === String(uOrId)) || { user_id: uOrId })
+  if (u.username) return `@${u.username}`
+  const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+  return name || String(u.user_id || uOrId || '')
 }
 
 function toggleAll(e) {
@@ -342,13 +361,20 @@ async function openDetail(u) {
 }
 
 function flash(msg, ok = true) {
+  // 保留顶部快速操作区反馈，同时弹出全局 Toast
   quickMsg.value = msg
   quickOk.value = ok
   setTimeout(() => { quickMsg.value = '' }, 4000)
+  if (ok) toast.success(msg)
+  else toast.error(msg)
 }
 
 async function batchBlock() {
-  const reason = prompt(t('users.batchBlockReasonPrompt'))
+  const reason = await dialog.prompt({
+    title: t('users.batchBlock'),
+    message: t('users.batchBlockReasonPrompt'),
+    defaultValue: '',
+  })
   if (reason === null) return
   await Promise.all(selected.value.map(uid => api.put(`/api/users/${uid}/block`, { reason, permanent: true })))
   flash(t('users.flash.blocked'))
@@ -357,6 +383,12 @@ async function batchBlock() {
 }
 
 async function batchUnblock() {
+  const ok = await dialog.confirm({
+    title: t('users.batchUnblock'),
+    message: t('users.batchUnblockConfirm', { n: selected.value.length }),
+    confirmText: t('users.batchUnblock'),
+  })
+  if (!ok) return
   await Promise.all(selected.value.map(uid => api.put(`/api/users/${uid}/unblock`, {})))
   flash(t('users.flash.unblocked'))
   selected.value = []
@@ -364,12 +396,29 @@ async function batchUnblock() {
 }
 
 async function batchWhitelist() {
+  const ok = await dialog.confirm({
+    title: t('users.batchWhitelist'),
+    message: t('users.batchWhitelistConfirm', { n: selected.value.length }),
+    confirmText: t('users.batchWhitelist'),
+  })
+  if (!ok) return
   await Promise.all(selected.value.map(uid => api.post(`/api/whitelist/${uid}`, { reason: 'batch' })))
+  // 同步本地白名单状态
+  const next = { ...wlMap.value }
+  for (const uid of selected.value) next[uid] = true
+  wlMap.value = next
   flash(t('users.flash.addedWhitelist'))
   selected.value = []
 }
 
 async function quickBlock() {
+  const ok = await dialog.confirm({
+    title: t('users.blockUser'),
+    message: t('users.quickBlockConfirm', { name: formatConfirmName(quickId.value) }),
+    danger: true,
+    confirmText: t('users.block'),
+  })
+  if (!ok) return
   try {
     await api.put(`/api/users/${quickId.value}/block`, { reason: quickReason.value || 'quick_block', permanent: true })
     flash(t('users.flash.blocked'))
@@ -380,6 +429,12 @@ async function quickBlock() {
 }
 
 async function quickUnblock() {
+  const ok = await dialog.confirm({
+    title: t('users.unblockUser'),
+    message: t('users.quickUnblockConfirm', { name: formatConfirmName(quickId.value) }),
+    confirmText: t('users.unblock'),
+  })
+  if (!ok) return
   try {
     await api.put(`/api/users/${quickId.value}/unblock`, {})
     flash(t('users.flash.unblocked'))
@@ -390,8 +445,15 @@ async function quickUnblock() {
 }
 
 async function quickWhitelist() {
+  const ok = await dialog.confirm({
+    title: t('users.addWhitelist'),
+    message: t('users.quickWhitelistConfirm', { name: formatConfirmName(quickId.value) }),
+    confirmText: t('users.addWhitelist'),
+  })
+  if (!ok) return
   try {
     await api.post(`/api/whitelist/${quickId.value}`, { reason: 'quick_add' })
+    wlMap.value = { ...wlMap.value, [quickId.value]: true }
     flash(t('users.flash.addedWhitelist'))
   } catch (e) {
     flash(e.message, false)
@@ -399,65 +461,141 @@ async function quickWhitelist() {
 }
 
 async function blockOne(u) {
-  const r = prompt(t('users.blockReasonPrompt'))
+  const r = await dialog.prompt({
+    title: t('users.blockUser'),
+    message: t('users.blockReasonPrompt'),
+    defaultValue: '',
+  })
   if (r === null) return
   await api.put(`/api/users/${u.user_id}/block`, { reason: r, permanent: true })
   u.is_blocked = 1
   u.is_permanent_block = 1
   u.block_reason = r
+  flash(t('users.flash.blocked'))
 }
 
 async function unblockOne(u) {
+  const ok = await dialog.confirm({
+    title: t('users.unblockUser'),
+    message: t('users.unblockConfirm', { name: formatConfirmName(u) }),
+    confirmText: t('users.unblock'),
+  })
+  if (!ok) return
   await api.put(`/api/users/${u.user_id}/unblock`, {})
   u.is_blocked = 0
   u.is_permanent_block = 0
+  flash(t('users.flash.unblocked'))
 }
 
 async function toggleWhitelistOne(u) {
-  try {
-    const r = await api.get(`/api/whitelist/check/${u.user_id}`)
-    if (r.whitelisted) {
+  const isWl = !!wlMap.value[u.user_id]
+  if (isWl) {
+    // 已是白名单：只允许移出，并必须确认
+    const ok = await dialog.confirm({
+      title: t('users.removeWhitelist'),
+      message: t('users.removeWhitelistConfirm', { name: formatConfirmName(u) }),
+      danger: true,
+      confirmText: t('users.removeWhitelist'),
+    })
+    if (!ok) return
+    try {
       await api.delete(`/api/whitelist/${u.user_id}`)
       wlMap.value = { ...wlMap.value, [u.user_id]: false }
+      if (detailUser.value?.user_id === u.user_id) detailIsWl.value = false
       flash(t('users.flash.removedWhitelist'))
-    } else {
-      await api.post(`/api/whitelist/${u.user_id}`, { reason: 'manual' })
-      wlMap.value = { ...wlMap.value, [u.user_id]: true }
-      flash(t('users.flash.addedWhitelist'))
+    } catch (e) {
+      flash(e.message, false)
     }
+    return
+  }
+
+  // 未在白名单：设置为白名单，需确认
+  const ok = await dialog.confirm({
+    title: t('users.addWhitelist'),
+    message: t('users.addWhitelistConfirm', { name: formatConfirmName(u) }),
+    confirmText: t('users.addWhitelist'),
+  })
+  if (!ok) return
+  try {
+    await api.post(`/api/whitelist/${u.user_id}`, { reason: 'manual' })
+    wlMap.value = { ...wlMap.value, [u.user_id]: true }
+    if (detailUser.value?.user_id === u.user_id) detailIsWl.value = true
+    flash(t('users.flash.addedWhitelist'))
   } catch (e) {
     flash(e.message, false)
   }
 }
 
 async function blockDetail() {
-  const r = prompt(t('users.blockReasonPrompt'))
+  const r = await dialog.prompt({
+    title: t('users.blockUser'),
+    message: t('users.blockReasonPrompt'),
+    defaultValue: '',
+  })
   if (r === null) return
   await api.put(`/api/users/${detailUser.value.user_id}/block`, { reason: r, permanent: true })
   detailUser.value.is_blocked = 1
+  flash(t('users.flash.blocked'))
   await load()
 }
 
 async function unblockDetail() {
+  const ok = await dialog.confirm({
+    title: t('users.unblockUser'),
+    message: t('users.unblockConfirm', { name: formatConfirmName(detailUser.value) }),
+    confirmText: t('users.unblock'),
+  })
+  if (!ok) return
   await api.put(`/api/users/${detailUser.value.user_id}/unblock`, {})
   detailUser.value.is_blocked = 0
+  flash(t('users.flash.unblocked'))
   await load()
 }
 
 async function toggleWlDetail() {
   if (detailIsWl.value) {
-    await api.delete(`/api/whitelist/${detailUser.value.user_id}`)
-    detailIsWl.value = false
-    wlMap.value = { ...wlMap.value, [detailUser.value.user_id]: false }
-  } else {
+    const ok = await dialog.confirm({
+      title: t('users.removeWhitelist'),
+      message: t('users.removeWhitelistConfirm', { name: formatConfirmName(detailUser.value) }),
+      danger: true,
+      confirmText: t('users.removeWhitelist'),
+    })
+    if (!ok) return
+    try {
+      await api.delete(`/api/whitelist/${detailUser.value.user_id}`)
+      detailIsWl.value = false
+      wlMap.value = { ...wlMap.value, [detailUser.value.user_id]: false }
+      flash(t('users.flash.removedWhitelist'))
+    } catch (e) {
+      flash(e.message, false)
+    }
+    return
+  }
+
+  const ok = await dialog.confirm({
+    title: t('users.addWhitelist'),
+    message: t('users.addWhitelistConfirm', { name: formatConfirmName(detailUser.value) }),
+    confirmText: t('users.addWhitelist'),
+  })
+  if (!ok) return
+  try {
     await api.post(`/api/whitelist/${detailUser.value.user_id}`, { reason: 'manual' })
     detailIsWl.value = true
     wlMap.value = { ...wlMap.value, [detailUser.value.user_id]: true }
+    flash(t('users.flash.addedWhitelist'))
+  } catch (e) {
+    flash(e.message, false)
   }
 }
 
 async function deleteOne(u) {
-  if (!confirm(t('users.deleteConfirm', { id: u.user_id }))) return
+  const ok = await dialog.confirm({
+    title: t('users.delete'),
+    message: t('users.deleteConfirm', { id: u.user_id }),
+    danger: true,
+    confirmText: t('users.delete'),
+  })
+  if (!ok) return
   try {
     await api.delete(`/api/users/${u.user_id}`)
     flash(t('users.flash.deleted'))
@@ -470,7 +608,13 @@ async function deleteOne(u) {
 
 async function deleteDetail() {
   if (!detailUser.value) return
-  if (!confirm(t('users.deleteConfirm', { id: detailUser.value.user_id }))) return
+  const ok = await dialog.confirm({
+    title: t('users.delete'),
+    message: t('users.deleteConfirm', { id: detailUser.value.user_id }),
+    danger: true,
+    confirmText: t('users.delete'),
+  })
+  if (!ok) return
   try {
     await api.delete(`/api/users/${detailUser.value.user_id}`)
     flash(t('users.flash.deleted'))
@@ -559,25 +703,41 @@ onMounted(() => {
 .u-username{font-size:12px;color:var(--text2);line-height:1.35;word-break:break-word}
 .u-ava{width:34px;height:34px;border-radius:50%;flex-shrink:0;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;overflow:hidden;position:relative}
 .u-ava.blocked{background:rgba(247,79,79,.15);color:var(--danger)}
-.u-ava.wl{box-shadow:0 0 0 1px rgba(79,142,247,.25)}
-.wl-hover-badge{
-  position:absolute;right:-2px;bottom:-2px;width:16px;height:16px;border-radius:50%;
-  background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;
-  opacity:0;transform:scale(.8);transition:var(--tr);box-shadow:0 0 0 2px var(--bg2);
-  pointer-events:none;
-}
-:global(:root.glass) .wl-hover-badge{box-shadow:0 0 0 2px rgba(16,18,26,.85)}
-:global(:root.light.glass) .wl-hover-badge{box-shadow:0 0 0 2px rgba(255,255,255,.9)}
-.user-cell:hover .wl-hover-badge{opacity:1;transform:scale(1)}
-.user-cell.is-blocked .wl-hover-badge,
 .user-cell.is-blocked .wl-inline-tag{display:none!important}
 .wl-inline-tag{
-  display:none;margin-left:6px;font-size:10px;font-weight:600;color:var(--accent);
-  background:var(--accent-dim);padding:1px 6px;border-radius:999px;vertical-align:middle;
+  display:inline-flex;margin-left:6px;font-size:10px;font-weight:600;color:var(--accent);
+  background:var(--accent-dim);padding:1px 6px;border-radius:999px;vertical-align:middle;align-items:center;
 }
-.user-cell.is-wl:hover .wl-inline-tag{display:inline-flex}
 .ava-img{width:100%;height:100%;object-fit:cover}
-.user-id{font-size:12px;display:inline-block;max-width:130px;overflow:auto}
+.user-id{
+  font-size:12px;
+  display:inline-block;
+  background:transparent!important;
+  border-radius:0;
+  padding:0;
+  max-width:none;
+  overflow:visible;
+  letter-spacing:.02em;
+  font-variant-numeric:tabular-nums;
+}
+.id-copy{
+  appearance:none;border:1px solid var(--border);background:var(--bg3);padding:5px 10px;margin:0;cursor:pointer;
+  color:var(--text2);font:inherit;display:inline-flex;align-items:center;justify-content:center;
+  min-width:118px;border-radius:8px;transition:var(--tr);line-height:1.2;
+}
+.id-copy:hover{
+  color:var(--accent);border-color:rgba(79,142,247,.35);background:var(--accent-dim);
+}
+.id-copy:hover code{color:var(--accent)}
+.id-copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+:global(:root.glass) .id-copy{
+  background:rgba(255,255,255,.06);
+  border-color:rgba(255,255,255,.12);
+}
+:global(:root.light.glass) .id-copy{
+  background:rgba(15,23,42,.04);
+  border-color:rgba(148,163,184,.28);
+}
 .cb{
   width:14px;
   height:14px;

@@ -6,7 +6,7 @@
         {{ t('settings.title') }}
       </h2>
       <div class="flex gap-2">
-        <button class="btn-ghost btn-sm" @click="load(true)">
+        <button class="btn-ghost btn-sm" @click="load(true)" :title="t('dashboard.refresh')">
           <AppIcon name="refresh" :size="14" />
         </button>
         <button class="btn-primary" @click="save" :disabled="saving">
@@ -15,7 +15,25 @@
       </div>
     </div>
 
-    <div v-if="loading" class="flex-center mt-3"><div class="spinner"></div></div>
+    <div v-if="loading" class="settings-layout mt-2">
+      <aside class="settings-nav card">
+        <div class="skeleton-stack" style="padding:4px 0">
+          <div class="skeleton skeleton-line" v-for="i in 7" :key="i"></div>
+        </div>
+      </aside>
+      <div class="settings-main">
+        <div class="card skeleton-card">
+          <div class="skeleton skeleton-line lg mb-2"></div>
+          <div class="skeleton-stack">
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line sm"></div>
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line sm"></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <template v-else>
       <transition name="fade">
         <div v-if="saved" class="alert alert-success">{{ t('settings.saved') }}</div>
@@ -44,7 +62,9 @@
                 <AppIcon name="bot" :size="18" />
                 {{ t('settings.section.bot') }}
               </h3>
-              <span class="settings-card-toggle-indicator">{{ isSectionOpen('bot') ? '−' : '+' }}</span>
+              <span class="settings-card-toggle-indicator" :class="{ open: isSectionOpen('bot') }">
+                <AppIcon name="chevron-down" :size="14" />
+              </span>
             </button>
             <div v-show="isSectionOpen('bot')" class="settings-card-body">
               <div class="form-group">
@@ -70,7 +90,7 @@
                   <AppIcon :name="groupInfo.type === 'supergroup' ? 'users' : 'conversations'" :size="18" />
                   <div>
                     <div style="font-weight:600">{{ groupInfo.title }}</div>
-                    <div class="text-muted text-sm">{{ t('common.id') }}: <code>{{ groupInfo.id }}</code></div>
+                    <div class="text-muted text-sm">{{ t('common.id') }}: <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(groupInfo.id)"><code>{{ groupInfo.id }}</code></button></div>
                   </div>
                   <button class="btn-primary btn-sm utility-btn" @click="form.FORUM_GROUP_ID = String(groupInfo.id)">{{ t('settings.use') }}</button>
                 </div>
@@ -88,7 +108,7 @@
                   <AppIcon :name="{ supergroup: 'users', channel: 'link' }[customInfo.type] || 'conversations'" :size="18" />
                   <div style="flex:1">
                     <div>{{ customInfo.title || customInfo.first_name }}</div>
-                    <div class="text-muted text-sm">{{ t('common.id') }}: {{ customInfo.id }}</div>
+                    <div class="text-muted text-sm">{{ t('common.id') }}: <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(customInfo.id)"><code>{{ customInfo.id }}</code></button></div>
                   </div>
                   <button class="btn-ghost btn-sm utility-btn" @click="form.FORUM_GROUP_ID = String(customInfo.id)">{{ t('settings.useId') }}</button>
                   <button class="btn-ghost btn-sm utility-btn" @click="addAdmin(String(customInfo.id))">{{ t('settings.setAdmin') }}</button>
@@ -115,7 +135,7 @@
                         <span class="admin-card-sep">·</span>
                         <span class="admin-card-meta">{{ adminSecondaryLine(id) }}</span>
                         <span class="admin-card-sep">·</span>
-                        <span class="admin-card-id">{{ t('common.id') }}: {{ id }}</span>
+                        <span class="admin-card-id">{{ t('common.id') }}: <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(id)">{{ id }}</button></span>
                       </div>
                     </div>
                     <button class="btn-ghost btn-sm admin-card-remove" @click="removeAdmin(i)">
@@ -148,7 +168,9 @@
                 <AppIcon name="webhook" :size="18" />
                 {{ t('settings.section.webhook') }}
               </h3>
-              <span class="settings-card-toggle-indicator">{{ isSectionOpen('webhook') ? '−' : '+' }}</span>
+              <span class="settings-card-toggle-indicator" :class="{ open: isSectionOpen('webhook') }">
+                <AppIcon name="chevron-down" :size="14" />
+              </span>
             </button>
             <div v-show="isSectionOpen('webhook')" class="settings-card-body">
               <div class="form-group">
@@ -171,7 +193,9 @@
                 <AppIcon name="verify" :size="18" />
                 {{ t('settings.section.verify') }}
               </h3>
-              <span class="settings-card-toggle-indicator">{{ isSectionOpen('verify') ? '−' : '+' }}</span>
+              <span class="settings-card-toggle-indicator" :class="{ open: isSectionOpen('verify') }">
+                <AppIcon name="chevron-down" :size="14" />
+              </span>
             </button>
             <div v-show="isSectionOpen('verify')" class="settings-card-body">
               <div class="toggle-row">
@@ -268,7 +292,9 @@
                 <AppIcon name="feature" :size="18" />
                 {{ t('settings.section.feature') }}
               </h3>
-              <span class="settings-card-toggle-indicator">{{ isSectionOpen('feature') ? '−' : '+' }}</span>
+              <span class="settings-card-toggle-indicator" :class="{ open: isSectionOpen('feature') }">
+                <AppIcon name="chevron-down" :size="14" />
+              </span>
             </button>
             <div v-show="isSectionOpen('feature')" class="settings-card-body">
               <div class="toggle-row">
@@ -376,7 +402,9 @@
                 <AppIcon name="block" :size="18" />
                 {{ t('settings.section.messageFilter') }}
               </h3>
-              <span class="settings-card-toggle-indicator">{{ isSectionOpen('messageFilter') ? '−' : '+' }}</span>
+              <span class="settings-card-toggle-indicator" :class="{ open: isSectionOpen('messageFilter') }">
+                <AppIcon name="chevron-down" :size="14" />
+              </span>
             </button>
             <div v-show="isSectionOpen('messageFilter')" class="settings-card-body">
               <div class="form-hint">{{ t('settings.feature.messageFilterHint') }}</div>
@@ -455,7 +483,9 @@
                 <AppIcon name="welcome" :size="18" />
                 {{ t('settings.section.welcome') }}
               </h3>
-              <span class="settings-card-toggle-indicator">{{ isSectionOpen('welcome') ? '−' : '+' }}</span>
+              <span class="settings-card-toggle-indicator" :class="{ open: isSectionOpen('welcome') }">
+                <AppIcon name="chevron-down" :size="14" />
+              </span>
             </button>
             <div v-show="isSectionOpen('welcome')" class="settings-card-body">
               <div class="toggle-row">
@@ -475,7 +505,9 @@
                 <AppIcon name="storage" :size="18" />
                 {{ t('settings.section.storage') }}
               </h3>
-              <span class="settings-card-toggle-indicator">{{ isSectionOpen('storage') ? '−' : '+' }}</span>
+              <span class="settings-card-toggle-indicator" :class="{ open: isSectionOpen('storage') }">
+                <AppIcon name="chevron-down" :size="14" />
+              </span>
             </button>
             <div v-show="isSectionOpen('storage')" class="settings-card-body">
               <div class="db-status">
@@ -506,9 +538,9 @@
                   </div>
                   <div class="sql-tools-actions">
                     <select v-model="sqlExportMode" class="toolbar-select">
-                      <option value="plain">Plain</option>
-                      <option value="base64">Base64</option>
-                      <option value="aes">AES-256-GCM</option>
+                      <option value="plain">{{ t('settings.storage.sqlMode.plain') }}</option>
+                      <option value="base64">{{ t('settings.storage.sqlMode.base64') }}</option>
+                      <option value="aes">{{ t('settings.storage.sqlMode.aes') }}</option>
                     </select>
                     <input
                       v-if="sqlExportMode === 'aes'"
@@ -577,6 +609,8 @@ import api from '../stores/api.js'
 import UserSearchPicker from '../components/UserSearchPicker.vue'
 import { useI18nStore } from '../stores/i18n'
 import { useAuthStore } from '../stores/auth.js'
+import { useDialog } from '../stores/dialog.js'
+import { useToast } from '../stores/toast.js'
 import { readLocalCache, writeLocalCache } from '../stores/local-cache.js'
 import {
   MESSAGE_FILTER_RULE_TYPES,
@@ -588,6 +622,8 @@ import {
 const i18n = useI18nStore()
 const auth = useAuthStore()
 const router = useRouter()
+const dialog = useDialog()
+const toast = useToast()
 const t = i18n.t
 
 const form = ref({})
@@ -693,7 +729,41 @@ function formatRuleType(type) {
 }
 
 function addAdmin(id) { const v = String(id).trim(); if (v && !adminList.value.includes(v)) adminList.value = [...adminList.value, v]; newAdminId.value = '' }
-function removeAdmin(i) { const a = [...adminList.value]; a.splice(i, 1); adminList.value = a }
+async function removeAdmin(i) {
+  const id = adminList.value[i]
+  const ok = await dialog.confirm({
+    title: t('common.confirm'),
+    message: t('settings.admin.removeConfirm', { id }),
+    danger: true,
+    confirmText: t('common.confirm'),
+  })
+  if (!ok) return
+  const a = [...adminList.value]
+  a.splice(i, 1)
+  adminList.value = a
+}
+
+async function copyTelegramId(id) {
+  const val = String(id || '').trim()
+  if (!val) return
+  try {
+    if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(val)
+    else {
+      const ta = document.createElement('textarea')
+      ta.value = val
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success(t('users.flash.copySuccess', { label: t('users.copyUid') }))
+  } catch (e) {
+    toast.error(t('users.flash.copyFailed', { err: e?.message || 'unknown' }))
+  }
+}
 
 function getAdminProfile(id) {
   return adminProfiles.value[String(id)] || { user_id: String(id), first_name: '', last_name: '', username: '' }
@@ -740,7 +810,14 @@ function addMessageFilterRule() {
   }
 }
 
-function removeMessageFilterRule(ruleId) {
+async function removeMessageFilterRule(ruleId) {
+  const ok = await dialog.confirm({
+    title: t('common.confirm'),
+    message: t('settings.feature.messageFilterRemoveConfirm'),
+    danger: true,
+    confirmText: t('common.confirm'),
+  })
+  if (!ok) return
   messageFilterRules.value = messageFilterRules.value.filter(rule => rule.id !== ruleId)
 }
 
@@ -865,9 +942,11 @@ async function save() {
     saved.value = true
     form.value.WEBHOOK_URL = webhookUrl.value || ''
     syncSettingsCache()
+    toast.success(t('settings.saved'))
     setTimeout(() => { saved.value = false }, 3000)
   } catch (e) {
     saveErr.value = e.message
+    toast.error(e.message)
   } finally {
     saving.value = false
   }
@@ -921,19 +1000,28 @@ async function setWebhook() {
 }
 
 async function switchDb(target, sync = true) {
-  dbSwitching.value = true
-  dbMsg.value = ''
   const targetLabel = target === 'hyperdrive' ? t('settings.storage.hyperdriveShort')
     : target === 'd1' ? t('settings.storage.d1Short') : t('settings.storage.kvShort')
+  const ok = await dialog.confirm({
+    title: t('common.confirm'),
+    message: t('settings.storage.switchConfirm', { target: targetLabel }),
+    confirmText: t('common.confirm'),
+  })
+  if (!ok) return
+
+  dbSwitching.value = true
+  dbMsg.value = ''
   try {
     await api.post('/api/settings/db/switch', { target, sync })
     dbInfo.value.active = target
     writeLocalCache(SETTINGS_DB_CACHE_KEY, dbInfo.value)
     dbMsg.value = t('settings.storage.switched', { target: targetLabel })
     dbOk.value = true
+    toast.success(dbMsg.value)
   } catch (e) {
     dbMsg.value = e.message
     dbOk.value = false
+    toast.error(e.message)
   } finally {
     dbSwitching.value = false
   }
@@ -1018,9 +1106,11 @@ async function exportSql() {
     sqlFileName.value = fileName
     sqlMsg.value = t('settings.storage.sqlExported', { name: fileName })
     sqlOk.value = true
+    toast.success(sqlMsg.value)
   } catch (e) {
     sqlMsg.value = e.message
     sqlOk.value = false
+    toast.error(e.message)
   } finally {
     sqlExporting.value = false
   }
@@ -1030,7 +1120,13 @@ async function handleSqlFileChange(event) {
   const file = event?.target?.files?.[0]
   if (!file) return
 
-  if (!confirm(t('settings.storage.sqlImportConfirm'))) {
+  const ok = await dialog.confirm({
+    title: t('settings.storage.sqlImport'),
+    message: t('settings.storage.sqlImportConfirm'),
+    danger: true,
+    confirmText: t('settings.storage.sqlImport'),
+  })
+  if (!ok) {
     if (event?.target) event.target.value = ''
     return
   }
@@ -1045,9 +1141,11 @@ async function handleSqlFileChange(event) {
     await load(true)
     sqlMsg.value = t('settings.storage.sqlImported', { name: file.name })
     sqlOk.value = true
+    toast.success(sqlMsg.value)
   } catch (e) {
     sqlMsg.value = e.message
     sqlOk.value = false
+    toast.error(e.message)
   } finally {
     sqlImporting.value = false
     if (event?.target) event.target.value = ''
@@ -1056,7 +1154,13 @@ async function handleSqlFileChange(event) {
 
 async function clearData() {
   if (clearingData.value) return
-  if (!confirm(t('settings.storage.clearDataConfirm'))) return
+  const ok = await dialog.confirm({
+    title: t('common.dangerAction'),
+    message: t('settings.storage.clearDataConfirm'),
+    danger: true,
+    confirmText: t('settings.storage.clearData'),
+  })
+  if (!ok) return
 
   clearingData.value = true
   dbMsg.value = ''
@@ -1065,11 +1169,13 @@ async function clearData() {
     await api.post('/api/settings/clear-data', {})
     dbMsg.value = t('settings.storage.cleared')
     dbOk.value = true
+    toast.success(dbMsg.value)
     await auth.logout()
     router.push('/login')
   } catch (e) {
     dbMsg.value = e.message
     dbOk.value = false
+    toast.error(e.message)
   } finally {
     clearingData.value = false
   }
@@ -1123,6 +1229,7 @@ onMounted(load)
 .admin-card-name{font-size:13px;font-weight:600;color:var(--text)}
 .admin-card-meta{font-size:12px;color:var(--text2)}
 .admin-card-id{font-size:12px;color:var(--text3)}
+/* id-copy 样式由全局 style.css 统一提供 */
 .admin-card-sep{color:var(--text3);flex-shrink:0}
 .admin-card-remove{position:absolute;top:50%;right:8px;transform:translateY(-50%);padding:2px 6px;line-height:1;align-self:auto}
 .message-filter-guide{display:flex;flex-direction:column;gap:10px;margin-top:12px}
@@ -1140,7 +1247,25 @@ onMounted(load)
 .message-filter-empty{padding:16px;text-align:center;color:var(--text3);border:1px dashed var(--border);border-radius:var(--rs);background:var(--bg2)}
 @media (max-width:900px){
   .settings-layout{grid-template-columns:1fr}
-  .settings-nav{position:static;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+  .settings-nav{
+    position:sticky;
+    top:8px;
+    z-index:20;
+    display:flex;
+    flex-direction:row;
+    gap:8px;
+    overflow-x:auto;
+    overflow-y:hidden;
+    padding:10px;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+  }
+  .settings-nav::-webkit-scrollbar{display:none}
+  .settings-nav-item{
+    width:auto;
+    flex:0 0 auto;
+    white-space:nowrap;
+  }
 }
 @media (max-width:640px){
   .admin-tags{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
@@ -1163,6 +1288,8 @@ onMounted(load)
 .settings-card-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;background:none;border:none;padding:0;margin:0;color:inherit;cursor:pointer;text-align:left}
 .settings-card-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:4px;border-radius:8px}
 .settings-card-toggle-indicator{width:28px;height:28px;border-radius:999px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1;color:var(--text2);flex-shrink:0;transition:var(--tr)}
+.settings-card-toggle-indicator :deep(svg){transition:transform .2s var(--ease-out)}
+.settings-card-toggle-indicator.open :deep(svg){transform:rotate(180deg)}
 .settings-card:hover .settings-card-toggle-indicator{border-color:var(--text3);color:var(--text)}
 .settings-card-body{padding-top:14px;animation:sectionOpen .2s var(--ease-out)}
 @keyframes sectionOpen{
