@@ -179,6 +179,28 @@
       <circle cx="11" cy="11" r="6" />
       <path d="M20 20l-4.2-4.2" />
     </template>
+
+    <template v-else-if="name === 'empty' || name === 'inbox'">
+      <path d="M4.5 8.5h15" />
+      <path d="M5.5 8.5l1.2 9.2A2 2 0 0 0 8.7 19.5h6.6a2 2 0 0 0 2-1.8l1.2-9.2" />
+      <path d="M9 8.5V6.8A2.8 2.8 0 0 1 11.8 4h.4A2.8 2.8 0 0 1 15 6.8V8.5" />
+      <path d="M9.5 13h5" />
+    </template>
+
+    <template v-else-if="name === 'chevron-left' || name === 'back'">
+      <path d="M14.5 6l-6 6 6 6" />
+    </template>
+
+    <template v-else-if="name === 'check'">
+      <path d="M5.5 12.5l4 4 9-9" />
+    </template>
+
+    <template v-else-if="name === 'key'">
+      <circle cx="8.5" cy="14.5" r="3.5" />
+      <path d="M11.5 12.5L19 5" />
+      <path d="M16.5 7.5l2 2" />
+      <path d="M14.5 9.5l1.5 1.5" />
+    </template>
   </svg>
 </template>
 

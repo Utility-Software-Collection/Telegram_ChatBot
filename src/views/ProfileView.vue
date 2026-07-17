@@ -1,15 +1,23 @@
 <template>
   <div class="page">
-    <h2 class="page-title page-title-with-icon mb-2">
-      <AppIcon name="profile" :size="20" />
-      {{ t('profile.title') }}
-    </h2>
+    <div class="page-header">
+      <div>
+        <h2 class="page-title page-title-with-icon">
+          <AppIcon name="profile" :size="20" />
+          {{ t('profile.title') }}
+        </h2>
+        <div class="page-subtitle" v-if="auth.username">@{{ auth.username }}</div>
+      </div>
+    </div>
 
     <div class="card mb-2">
-      <h3 class="sec-title">{{ t('profile.username.title') }}</h3>
+      <h3 class="sec-title sec-title-with-icon">
+        <AppIcon name="profile" :size="16" />
+        {{ t('profile.username.title') }}
+      </h3>
       <div class="form-group">
         <label>{{ t('profile.username.new') }}</label>
-        <input v-model="newUsername" :placeholder="t('profile.username.ph')" />
+        <input v-model="newUsername" :placeholder="t('profile.username.ph')" autocomplete="username" />
       </div>
       <div v-if="unameMsg" class="alert" :class="unameOk ? 'alert-success' : 'alert-error'">{{ unameMsg }}</div>
       <button class="btn-primary" @click="changeUsername" :disabled="unameLoading">
@@ -18,14 +26,17 @@
     </div>
 
     <div class="card mb-2">
-      <h3 class="sec-title">{{ t('profile.password.title') }}</h3>
+      <h3 class="sec-title sec-title-with-icon">
+        <AppIcon name="key" :size="16" />
+        {{ t('profile.password.title') }}
+      </h3>
       <div class="form-group">
         <label>{{ t('profile.password.current') }}</label>
-        <input type="password" v-model="oldPw" />
+        <input type="password" v-model="oldPw" autocomplete="current-password" />
       </div>
       <div class="form-group">
         <label>{{ t('profile.password.new') }}</label>
-        <input type="password" v-model="newPw" :placeholder="t('profile.password.ph')" />
+        <input type="password" v-model="newPw" :placeholder="t('profile.password.ph')" autocomplete="new-password" />
       </div>
       <div v-if="pwMsg" class="alert" :class="pwOk ? 'alert-success' : 'alert-error'">{{ pwMsg }}</div>
       <button class="btn-primary" @click="changePassword" :disabled="pwLoading">
@@ -34,7 +45,10 @@
     </div>
 
     <div class="card">
-      <h3 class="sec-title">{{ t('profile.2fa.title') }}</h3>
+      <h3 class="sec-title sec-title-with-icon">
+        <AppIcon name="lock" :size="16" />
+        {{ t('profile.2fa.title') }}
+      </h3>
 
       <div v-if="!totpEnabled && !totpSecret">
         <p class="text-muted text-sm mb-2">{{ t('profile.2fa.tip') }}</p>
@@ -54,7 +68,7 @@
         <div class="form-group">
           <label>{{ t('profile.2fa.verifyLabel') }}</label>
           <div class="row-g">
-            <input v-model="totpToken" placeholder="123456" maxlength="6" @keydown.enter="verify2FA" />
+            <input v-model="totpToken" placeholder="123456" maxlength="6" inputmode="numeric" @keydown.enter="verify2FA" />
             <button class="btn-primary" @click="verify2FA" :disabled="totpLoading">
               <span v-if="totpLoading" class="spinner"></span>{{ t('profile.2fa.verifySubmit') }}
             </button>
@@ -186,8 +200,13 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.page { max-width: 540px; margin: 0 auto; }
-.page-title-with-icon{display:flex;align-items:center;gap:8px}
-.qr-wrap { display: flex; justify-content: center; }
-.qr-wrap img { border-radius: 8px; border: 4px solid var(--bg2); }
+.page{max-width:540px;margin:0 auto}
+.qr-wrap{display:flex;justify-content:center}
+.qr-wrap img{
+  border-radius:12px;
+  border:4px solid var(--bg2);
+  background:#fff;
+  box-shadow:0 8px 24px rgba(0,0,0,.12);
+}
+:global(:root.glass) .qr-wrap img{border-color:rgba(255,255,255,.12)}
 </style>

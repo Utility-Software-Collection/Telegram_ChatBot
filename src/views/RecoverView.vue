@@ -1,30 +1,30 @@
 <template>
   <div class="auth-page">
     <div class="auth-card card">
-      <h1 class="login-title login-title-with-icon">
-        <AppIcon name="lock" :size="20" />
-        {{ t('auth.recover.title') }}
-      </h1>
+      <div class="login-logo">
+        <AppIcon name="lock" :size="40" />
+      </div>
+      <h1 class="login-title">{{ t('auth.recover.title') }}</h1>
       <div class="alert alert-info mb-2">{{ t('auth.recover.tip') }}</div>
       <div v-if="error" class="alert alert-error">{{ error }}</div>
       <div v-if="success" class="alert alert-success">{{ t('auth.recover.success') }}</div>
 
       <div class="form-group">
         <label>{{ t('auth.recover.username') }}</label>
-        <input v-model="username" :placeholder="t('auth.recover.username')" />
+        <input v-model="username" :placeholder="t('auth.recover.username')" autocomplete="username" />
       </div>
       <div class="form-group">
         <label>{{ t('auth.recover.totp') }}</label>
-        <input v-model="totp" :placeholder="t('auth.recover.totpPh')" maxlength="6" />
+        <input v-model="totp" :placeholder="t('auth.recover.totpPh')" maxlength="6" inputmode="numeric" autocomplete="one-time-code" />
       </div>
       <div class="form-group">
         <label>{{ t('auth.recover.newPassword') }}</label>
-        <input v-model="newPassword" type="password" :placeholder="t('auth.recover.newPasswordPh')" />
+        <input v-model="newPassword" type="password" :placeholder="t('auth.recover.newPasswordPh')" autocomplete="new-password" @keydown.enter="doRecover" />
       </div>
       <button class="btn-primary w-full" @click="doRecover" :disabled="loading">
         <span v-if="loading" class="spinner"></span>{{ loading ? t('auth.recover.submitting') : t('auth.recover.submit') }}
       </button>
-      <div style="margin-top:12px;text-align:center">
+      <div class="auth-footer-link">
         <RouterLink to="/login" class="text-sm">← {{ t('auth.recover.backLogin') }}</RouterLink>
       </div>
     </div>
@@ -85,11 +85,16 @@ async function doRecover() {
     radial-gradient(ellipse 55% 45% at 15% 85%, rgba(99,102,241,.1), transparent 55%),
     radial-gradient(ellipse 45% 35% at 90% 70%, rgba(14,165,233,.1), transparent 55%);
 }
-.auth-card{width:100%;max-width:380px;padding:36px 28px;position:relative;animation:loginIn .4s var(--ease-out);z-index:1}
+.auth-card{width:100%;max-width:380px;padding:28px 28px 32px;position:relative;animation:loginIn .4s var(--ease-out);z-index:1}
 @keyframes loginIn{
   from{opacity:0;transform:translateY(20px) scale(.97)}
   to{opacity:1;transform:translateY(0) scale(1)}
 }
-.login-title{font-size:20px;font-weight:700;text-align:center;margin-bottom:20px}
-.login-title-with-icon{display:flex;align-items:center;justify-content:center;gap:8px}
+.login-logo{display:flex;align-items:center;justify-content:center;margin-bottom:12px;color:var(--accent)}
+.login-title{font-size:21px;font-weight:700;text-align:center;margin-bottom:18px}
+.auth-footer-link{margin-top:16px;text-align:center}
+@media (max-width:480px){
+  .auth-page{padding:14px}
+  .auth-card{padding:22px 18px 26px}
+}
 </style>

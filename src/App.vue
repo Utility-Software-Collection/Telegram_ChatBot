@@ -45,7 +45,9 @@
               >
                 <AppIcon :name="option.icon" :size="16" class="theme-menu-icon" />
                 <span class="theme-menu-label">{{ option.label }}</span>
-                <span class="theme-menu-check">{{ themeMode === option.value ? '●' : '' }}</span>
+                <span class="theme-menu-check">
+                  <AppIcon v-if="themeMode === option.value" name="check" :size="14" />
+                </span>
               </button>
             </div>
           </div>
@@ -59,12 +61,12 @@
             <span class="glass-toggle-icon" :class="{ active: glassEnabled }" aria-hidden="true"></span>
           </button>
 
-          <div class="user-chip">
+          <RouterLink to="/profile" class="user-chip" :title="t('nav.profile')">
             <div class="user-ava">{{ auth.username?.[0]?.toUpperCase() || 'U' }}</div>
             <span class="user-name hide-mobile">{{ auth.username }}</span>
-          </div>
+          </RouterLink>
 
-          <button class="btn-icon" @click="handleLogout" :title="t('app.logout')" style="color:var(--danger)">
+          <button class="btn-icon logout-btn" @click="handleLogout" :title="t('app.logout')">
             <AppIcon name="logout" :size="18" />
           </button>
         </div>
@@ -117,7 +119,9 @@
           >
             <AppIcon :name="option.icon" :size="16" class="theme-menu-icon" />
             <span class="theme-menu-label">{{ option.label }}</span>
-            <span class="theme-menu-check">{{ themeMode === option.value ? '●' : '' }}</span>
+            <span class="theme-menu-check">
+              <AppIcon v-if="themeMode === option.value" name="check" :size="14" />
+            </span>
           </button>
         </div>
       </div>

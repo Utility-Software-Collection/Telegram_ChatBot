@@ -16,7 +16,7 @@
             {{ t('users.pageSizeOption', { n: size }) }}
           </option>
         </select>
-        <button class="btn-ghost btn-sm" @click="load">
+        <button class="btn-ghost btn-sm" @click="load" :title="t('dashboard.refresh')">
           <AppIcon name="refresh" :size="14" />
         </button>
       </div>
@@ -127,7 +127,7 @@
                       <AppIcon name="whitelist" :size="14" />
                     </button>
                     <button class="btn-danger btn-sm" @click.stop="deleteOne(u)" :title="t('users.delete')">
-                      <AppIcon name="close" :size="14" />
+                      <AppIcon name="delete" :size="14" />
                     </button>
                     <RouterLink :to="`/conversations?user=${u.user_id}`" class="btn-ghost btn-sm action-link action-link-icon" :title="t('users.messages')">
                       <AppIcon name="conversations" :size="14" />
@@ -136,7 +136,12 @@
                 </td>
               </tr>
               <tr v-if="!users.length">
-                <td colspan="6" class="text-center text-muted" style="padding:24px">{{ t('users.empty') }}</td>
+                <td colspan="6">
+                  <div class="empty-state">
+                    <div class="empty-state-icon"><AppIcon name="users" :size="24" /></div>
+                    <div class="empty-state-title">{{ t('users.empty') }}</div>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -214,7 +219,7 @@
             {{ detailIsWl ? t('users.removeWhitelist') : t('users.addWhitelist') }}
           </button>
           <button class="btn-danger" @click="deleteDetail">
-            <AppIcon name="close" :size="14" />
+            <AppIcon name="delete" :size="14" />
             {{ t('users.delete') }}
           </button>
           <RouterLink :to="`/conversations?user=${detailUser.user_id}`" class="btn-ghost action-link" style="text-decoration:none" @click="detailUser = null">

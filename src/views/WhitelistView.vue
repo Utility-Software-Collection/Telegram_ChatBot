@@ -5,7 +5,7 @@
         <AppIcon name="whitelist" :size="20" />
         {{ t('whitelist.title') }}
       </h2>
-      <button class="btn-ghost btn-sm" @click="load">
+      <button class="btn-ghost btn-sm" @click="load" :title="t('whitelist.refresh')">
         <AppIcon name="refresh" :size="14" />
         {{ t('whitelist.refresh') }}
       </button>
@@ -20,7 +20,9 @@
         <UserSearchPicker v-model="addId" :placeholder="t('whitelist.search')" @selected="u => addId = String(u.user_id)" style="flex:1" />
         <input v-model="addReason" :placeholder="t('whitelist.reasonOptional')" style="flex:1" />
         <button class="btn-primary btn-sm" :disabled="!addId || adding" @click="doAdd">
-          <span v-if="adding" class="spinner"></span>{{ t('whitelist.add') }}
+          <span v-if="adding" class="spinner"></span>
+          <AppIcon v-else name="add" :size="14" />
+          {{ t('whitelist.add') }}
         </button>
       </div>
       <div v-if="addMsg" class="alert mt-1" :class="addOk ? 'alert-success' : 'alert-error'">{{ addMsg }}</div>
@@ -28,9 +30,20 @@
     </div>
 
     <div class="card">
-      <div v-if="loading" class="flex-center" style="padding:30px"><div class="spinner"></div></div>
+      <div v-if="loading" class="skeleton-stack" style="padding:8px 0">
+        <div class="skeleton-row" v-for="i in 4" :key="i">
+          <div class="skeleton skeleton-ava"></div>
+          <div class="skeleton-stack" style="flex:1">
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton skeleton-line sm"></div>
+          </div>
+        </div>
+      </div>
       <template v-else>
-        <div v-if="!users.length" class="text-center text-muted" style="padding:32px">{{ t('whitelist.empty') }}</div>
+        <div v-if="!users.length" class="empty-state">
+          <div class="empty-state-icon"><AppIcon name="whitelist" :size="24" /></div>
+          <div class="empty-state-title">{{ t('whitelist.empty') }}</div>
+        </div>
         <div style="overflow-x:auto" v-else>
           <table class="table">
             <thead>
@@ -54,20 +67,36 @@
                     </div>
                   </div>
                 </td>
-                <td class="hide-mobile"><code style="font-size:12px">{{ u.user_id }}</code></td>
+                <td class="hide-mobile"><code class="user-id">{{ u.user_id }}</code></td>
                 <td class="text-muted text-sm">{{ u.reason || '—' }}</td>
                 <td class="hide-mobile text-muted text-sm">{{ fmtDate(u.created_at) }}</td>
                 <td>
-                  <button class="btn-danger btn-sm" @click="doRemove(u)">{{ t('whitelist.remove') }}</button>
+                  <div class="row-actions">
+                    <RouterLink :to="`/conversations?user=${u.user_id}`" class="btn-ghost btn-sm action-link-icon" :title="t('users.messages')">
+                      <AppIcon name="conversations" :size="14" />
+                    </RouterLink>
+                    <button class="btn-danger btn-sm" @click="doRemove(u)" :title="t('whitelist.remove')">
+                      <AppIcon name="delete" :size="14" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div class="pagination" v-if="total > pageSize">
-          <button class="btn-ghost btn-sm" :disabled="page <= 1" @click="page--; load()">◀</button>
-          <span class="text-muted text-sm">{{ t('whitelist.pageInfo', { page, total }) }}</span>
-          <button class="btn-ghost btn-sm" :disabled="page * pageSize >= total" @click="page++; load()">▶</button>
+        <div class="pagination-bar" v-if="total > pageSize">
+          <div class="pagination-meta">
+            <span class="text-muted text-sm">{{ t('whitelist.pageInfo', { page, total }) }}</span>
+          </div>
+          <div class="pagination-actions">
+            <button class="btn-ghost btn-sm" :disabled="page <= 1" @click="page--; load()">
+              <AppIcon name="chevron-left" :size="14" />
+              {{ t('users.prevPage') }}
+            </button>
+            <button class="btn-ghost btn-sm" :disabled="page * pageSize >= total" @click="page++; load()">
+              {{ t('users.nextPage') }}
+            </button>
+          </div>
         </div>
       </template>
     </div>
@@ -76,6 +105,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import api from '../stores/api.js'
 import UserSearchPicker from '../components/UserSearchPicker.vue'
@@ -117,14 +147,19 @@ async function doRemove(u) {
   } catch (e) { alert(e.message) }
 }
 
-function fmtDate(ts) { return ts ? new Date(ts).toLocaleDateString('zh-CN') : '—' }
+function fmtDate(ts) {
+  if (!ts) return '—'
+  try {
+    return new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
+  } catch {
+    return '—'
+  }
+}
 onMounted(load)
 </script>
 
 <style scoped>
-.page{max-width:720px;margin:0 auto}
-.page-title-with-icon,
-.sec-title-with-icon{display:flex;align-items:center;gap:8px}
+.page{max-width:980px;margin:0 auto}
 .quick-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .user-cell{display:flex;align-items:center;gap:10px;min-width:0}
 .user-cell-line{min-width:0;display:flex;align-items:center;gap:6px;white-space:nowrap}
@@ -132,4 +167,9 @@ onMounted(load)
 .user-cell-meta{min-width:0;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis}
 .user-cell-sep{color:var(--text3);flex-shrink:0}
 .u-ava{width:32px;height:32px;border-radius:50%;flex-shrink:0;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+.user-id{font-size:12px}
+@media (max-width:768px){
+  .page{max-width:100%}
+  .quick-row > *{min-width:0}
+}
 </style>

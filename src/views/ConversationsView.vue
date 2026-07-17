@@ -28,7 +28,10 @@
             </div>
             <div class="item-time">{{ fmtShort(c.last_at) }}</div>
           </div>
-          <div v-if="!filtered.length" class="empty">{{ t('conv.empty') }}</div>
+          <div v-if="!filtered.length" class="empty-state">
+            <div class="empty-state-icon"><AppIcon name="conversations" :size="22" /></div>
+            <div class="empty-state-title">{{ t('conv.empty') }}</div>
+          </div>
         </template>
       </div>
     </div>
@@ -36,7 +39,9 @@
     <div class="conv-right" :class="{ 'mobile-hidden': mobileView === 'list' }">
       <template v-if="selUser">
         <div class="right-header">
-          <button class="btn-icon mobile-only" @click="mobileView = 'list'" style="font-size:18px">←</button>
+          <button class="btn-icon mobile-only" @click="mobileView = 'list'" :title="t('users.prevPage')">
+            <AppIcon name="back" :size="18" />
+          </button>
           <div class="hdr-ava">
             <img v-if="avatars[selUser.user_id]" :src="avatars[selUser.user_id]" class="ava-img" @error="avatars[selUser.user_id] = ''" />
             <span v-else>{{ (selUser.first_name || '?')[0].toUpperCase() }}</span>
@@ -50,16 +55,13 @@
           <span class="badge" :class="selUser.is_blocked ? 'badge-danger' : 'badge-success'">
             {{ selUser.is_blocked ? t('conv.status.blocked') : t('conv.status.normal') }}
           </span>
-          <button v-if="!selUser.is_blocked" class="btn-danger btn-sm hide-mobile" @click="blockUser" :title="t('users.blockUser')">
+          <button v-if="!selUser.is_blocked" class="btn-danger btn-sm" @click="blockUser" :title="t('users.blockUser')">
             <AppIcon name="block" :size="14" />
           </button>
-          <button v-else class="btn-success btn-sm hide-mobile" @click="unblockUser" :title="t('users.unblockUser')">
+          <button v-else class="btn-success btn-sm" @click="unblockUser" :title="t('users.unblockUser')">
             <AppIcon name="unblock" :size="14" />
           </button>
-          <button class="btn-ghost btn-sm hide-mobile" @click="deleteConv" :title="t('conv.deleteTitle')">
-            <AppIcon name="delete" :size="14" />
-          </button>
-          <button class="btn-ghost btn-sm mobile-only" @click="deleteConv" :title="t('conv.deleteTitle')">
+          <button class="btn-ghost btn-sm" @click="deleteConv" :title="t('conv.deleteTitle')">
             <AppIcon name="delete" :size="14" />
           </button>
         </div>
@@ -67,7 +69,10 @@
         <div class="msg-list" ref="msgRef">
           <div v-if="loadingMsgs" class="flex-center" style="padding:30px"><div class="spinner"></div></div>
           <template v-else>
-            <div v-if="!dedupedMsgs.length" class="empty">{{ t('conv.msgEmpty') }}</div>
+            <div v-if="!dedupedMsgs.length" class="empty-state">
+              <div class="empty-state-icon"><AppIcon name="inbox" :size="22" /></div>
+              <div class="empty-state-title">{{ t('conv.msgEmpty') }}</div>
+            </div>
             <div v-for="m in dedupedMsgs" :key="m.id" class="msg-wrap" :class="m.direction">
               <div class="msg-bubble">
                 <div class="msg-type-badge" v-if="m.message_type && m.message_type !== 'text'">
@@ -267,7 +272,7 @@ function fmtShort(ts) {
   if (diff < 60000) return t('conv.justNow')
   if (diff < 3600000) return Math.floor(diff / 60000) + 'm'
   if (diff < 86400000) return Math.floor(diff / 3600000) + 'h'
-  return d.toLocaleDateString('zh-CN')
+  return d.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })
 }
 function fmtFull(ts) {
   if (!ts) return ''

@@ -13,12 +13,12 @@
       </div>
       <div class="form-group">
         <label>{{ t('auth.register.password') }}</label>
-        <input v-model="password" type="password" :placeholder="t('auth.register.passwordPh')" autocomplete="new-password" />
+        <input v-model="password" type="password" :placeholder="t('auth.register.passwordPh')" autocomplete="new-password" @keydown.enter="doRegister" />
       </div>
       <button class="btn-primary w-full" @click="doRegister" :disabled="loading">
         <span v-if="loading" class="spinner"></span>{{ loading ? t('auth.register.submitting') : t('auth.register.submit') }}
       </button>
-      <div style="margin-top:12px;text-align:center">
+      <div class="auth-footer-link">
         <RouterLink to="/login" class="text-sm">← {{ t('auth.register.toLogin') }}</RouterLink>
       </div>
     </div>
@@ -84,11 +84,20 @@ async function doRegister() {
     radial-gradient(ellipse 55% 45% at 15% 85%, rgba(99,102,241,.1), transparent 55%),
     radial-gradient(ellipse 45% 35% at 90% 70%, rgba(14,165,233,.1), transparent 55%);
 }
-.auth-card{width:100%;max-width:380px;padding:36px 28px;position:relative;animation:loginIn .4s var(--ease-out);z-index:1}
+.auth-card{width:100%;max-width:380px;padding:28px 28px 32px;position:relative;animation:loginIn .4s var(--ease-out);z-index:1}
 @keyframes loginIn{
   from{opacity:0;transform:translateY(20px) scale(.97)}
   to{opacity:1;transform:translateY(0) scale(1)}
 }
-.login-logo{display:flex;align-items:center;justify-content:center;margin-bottom:12px}
-.login-title{font-size:20px;font-weight:700;text-align:center;margin-bottom:20px}
+.login-logo{display:flex;align-items:center;justify-content:center;margin-bottom:12px;animation:logoFloat 4s var(--ease-in-out) infinite}
+@keyframes logoFloat{
+  0%,100%{transform:translateY(0)}
+  50%{transform:translateY(-4px)}
+}
+.login-title{font-size:21px;font-weight:700;text-align:center;margin-bottom:18px}
+.auth-footer-link{margin-top:16px;text-align:center}
+@media (max-width:480px){
+  .auth-page{padding:14px}
+  .auth-card{padding:22px 18px 26px}
+}
 </style>

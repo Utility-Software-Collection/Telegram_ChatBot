@@ -11,12 +11,29 @@
       </button>
     </div>
 
-    <div v-if="loading" class="flex-center mt-3"><div class="spinner"></div></div>
+    <div v-if="loading" class="skeleton-stack mt-2">
+      <div class="stat-grid mb-2">
+        <div class="card skeleton-card" v-for="i in 4" :key="i">
+          <div class="skeleton-row">
+            <div class="skeleton skeleton-ava"></div>
+            <div class="skeleton-stack" style="flex:1">
+              <div class="skeleton skeleton-line lg"></div>
+              <div class="skeleton skeleton-line sm"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card skeleton-card">
+        <div class="skeleton skeleton-line lg mb-2"></div>
+        <div class="skeleton skeleton-line mb-1"></div>
+        <div class="skeleton skeleton-line sm"></div>
+      </div>
+    </div>
     <template v-else>
       <div class="stat-grid mb-2">
         <div class="stat-card card clickable" v-for="s in statCards" :key="s.label" @click="goTo(s.to)">
-          <div class="stat-icon">
-            <AppIcon :name="s.icon" :size="26" />
+          <div class="stat-icon-wrap">
+            <AppIcon :name="s.icon" :size="22" />
           </div>
           <div>
             <div class="stat-val" :class="s.cls">{{ s.val }}</div>
@@ -61,7 +78,10 @@
           </h3>
           <RouterLink to="/conversations" class="text-sm">{{ t('dashboard.viewAll') }} →</RouterLink>
         </div>
-        <div v-if="!convs.length" class="text-muted text-sm text-center" style="padding:16px">{{ t('dashboard.emptyConversations') }}</div>
+        <div v-if="!convs.length" class="empty-state">
+          <div class="empty-state-icon"><AppIcon name="conversations" :size="24" /></div>
+          <div class="empty-state-title">{{ t('dashboard.emptyConversations') }}</div>
+        </div>
         <RouterLink v-for="c in convs.slice(0, 8)" :key="c.user_id" :to="`/conversations?user=${c.user_id}`" class="conv-row">
           <div class="conv-ava">
             <img v-if="avatars[c.user_id]" :src="avatars[c.user_id]" class="ava-img" @error="avatars[c.user_id] = ''" />
@@ -193,8 +213,7 @@ onMounted(load)
   transform:translateY(-2px);
   box-shadow:0 8px 24px rgba(79,142,247,.15);
 }
-.stat-card.clickable:hover .stat-icon{transform:scale(1.1)}
-.stat-icon{display:flex;align-items:center;justify-content:center;transition:transform .25s var(--ease-out)}
+.stat-card.clickable:hover .stat-icon-wrap{transform:scale(1.08)}
 .stat-val{font-size:26px;font-weight:700;line-height:1;letter-spacing:-.02em}
 .text-danger{color:var(--danger)}.text-success{color:var(--success)}
 .bot-info{display:flex;align-items:center;gap:12px}
