@@ -21,18 +21,18 @@ const router = createRouter({
     { path: '/conversations', name: 'Conversations', component: ConversationsView },
     { path: '/users', name: 'Users', component: UsersView },
     { path: '/whitelist', name: 'Whitelist', component: WhitelistView },
-    { path: '/settings', name: 'Settings', component: SettingsView },
+    { path: '/settings', name: 'Settings', component: SettingsView, meta: { admin: true } },
     { path: '/profile', name: 'Profile', component: ProfileView },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
 
-// 首次注册阶段也允许访问的公开页（可用默认 admin 登录，不必强制卡在注册页）
+// 首次注册阶段也允许访问的公开页
 const AUTH_PUBLIC_PATHS = new Set(['/login', '/register', '/recover'])
 
 async function fetchAuthStatus() {
   try {
-    const res = await fetch('/api/auth/status')
+    const res = await fetch('/api/auth/status', { credentials: 'include' })
     const data = await readJsonSafe(res, {})
     return !!data.needsRegistration
   } catch {
@@ -42,29 +42,25 @@ async function fetchAuthStatus() {
 
 router.beforeEach(async (to, from, next) => {
   const auth = useAuthStore()
-  const token = localStorage.getItem('token')
 
-  // 已有 token：校验会话
-  if (token) {
-    // 访问公开页时，若会话仍有效则回首页；无效则清状态并继续去公开页
-    if (to.meta.public) {
-      const ok = await auth.checkAuth()
-      if (ok) return next('/')
-      return next()
-    }
-
+  // 始终用 Cookie 会话校验（checkAuth 内部兼容遗留 Bearer）
+  // 访问公开页：有效会话则回首页
+  if (to.meta.public) {
     const ok = await auth.checkAuth()
-    if (ok) return next()
-    // token 失效后落到下方未登录逻辑
-  } else if (auth.isLoggedIn) {
-    // 内存状态有登录但本地 token 已丢：重置后按未登录处理
-    auth.resetState()
+    if (ok) return next('/')
+    return next()
   }
 
-  // 未登录访问受保护页 / 公开页
+  const ok = await auth.checkAuth()
+  if (ok) {
+    // 管理页需要 isAdmin
+    if (to.meta.admin && !auth.isAdmin) return next('/')
+    return next()
+  }
+
+  // 未登录
   const needFirst = await fetchAuthStatus()
   if (needFirst) {
-    // 允许 login / register / recover 互相跳转；其它路径引导去注册
     if (AUTH_PUBLIC_PATHS.has(to.path)) return next()
     return next('/register')
   }

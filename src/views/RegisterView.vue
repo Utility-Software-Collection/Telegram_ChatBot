@@ -43,12 +43,23 @@ async function doRegister() {
   if (!username.value || !password.value) { error.value = t('auth.register.err.required'); return }
   loading.value = true; error.value = ''
   try {
-    const res  = await fetch('/api/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username: username.value, password: password.value }) })
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ username: username.value, password: password.value }),
+    })
     const data = await readJsonSafe(res, {})
     if (!res.ok) throw new Error(data.error || t('auth.register.err.fallback'))
-    if (!data.token) throw new Error(t('auth.register.err.fallback'))
-    auth.token = data.token; auth.username = data.username; auth.isAdmin = true
-    localStorage.setItem('token', data.token); localStorage.setItem('username', data.username); localStorage.setItem('isAdmin', 'true')
+    if (!data.username) throw new Error(t('auth.register.err.fallback'))
+    // 主会话依赖 HttpOnly Cookie；不再把 token 写入 localStorage
+    auth.token = ''
+    auth.username = data.username
+    auth.isAdmin = true
+    auth.sessionReady = true
+    localStorage.removeItem('token')
+    localStorage.setItem('username', data.username)
+    localStorage.setItem('isAdmin', 'true')
     router.push('/')
   } catch (e) { error.value = e.message }
   finally { loading.value = false }

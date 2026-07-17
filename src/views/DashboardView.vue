@@ -129,7 +129,8 @@ const statCards = computed(() => [
 ])
 
 const configChecks = computed(() => [
-  { label: t('dashboard.config.botToken'), ok: !!settings.value.BOT_TOKEN },
+  // GET /settings 对 BOT_TOKEN 脱敏为 ****xxxx，非空即视为已配置
+  { label: t('dashboard.config.botToken'), ok: !!String(settings.value.BOT_TOKEN || '').trim() },
   { label: t('dashboard.config.topicGroupId'), ok: !!settings.value.FORUM_GROUP_ID },
   { label: t('dashboard.config.adminIds'), ok: !!settings.value.ADMIN_IDS },
 ])

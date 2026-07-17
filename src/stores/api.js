@@ -5,7 +5,12 @@ import { isZalgoFilterEnabled, sanitizeDataTree } from '../../shared/display-nam
 import { readLocalCache } from './local-cache.js'
 import { markSessionExpired } from './auth.js'
 
-const api = axios.create({ timeout: 30000, headers: { 'Content-Type': 'application/json' }, withCredentials: true })
+// withCredentials: 主会话走 HttpOnly Cookie
+const api = axios.create({
+  timeout: 30000,
+  headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
+})
 
 function t(key) {
   const locale = normalizeLocale(localStorage.getItem('ui_locale') || 'zh-hans')
@@ -26,6 +31,7 @@ function shouldSanitizeDisplayNames(payload = null) {
 }
 
 api.interceptors.request.use(config => {
+  // 兼容迁移期：若仍有遗留 localStorage token 则附带；主路径依赖 Cookie
   const token = localStorage.getItem('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
@@ -37,7 +43,8 @@ api.interceptors.response.use(
     const status = error.response?.status
     const message = error.response?.data?.error || error.message || t('store.api.requestFailed')
 
-    if (status === 401 && localStorage.getItem('token')) {
+    // Cookie 会话下：任意已登录态 401 都视为过期（不再要求 localStorage.token）
+    if (status === 401) {
       markSessionExpired()
     }
 

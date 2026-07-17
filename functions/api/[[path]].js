@@ -6,8 +6,61 @@ import { verifyTOTP, generateTOTPSecret } from '../_shared/totp.js';
 import { renderCaptchaPNG } from '../_shared/captcha.js';
 import { setupCommands, getOrCreateThread } from '../_shared/bot.js';
 import { normalizeBotLocale, createBotT } from '../_shared/bot-i18n.js';
-import { exportBusinessDataSql, importBusinessDataSql } from '../_shared/db-sql.js';
+import { exportBusinessDataSql, importBusinessDataSql, parseBusinessSql } from '../_shared/db-sql.js';
 import { createT, normalizeLocale } from '../../shared/i18n.js';
+
+/** 返回给前端时需要脱敏的密钥字段 */
+const SECRET_SETTING_KEYS = [
+  'BOT_TOKEN',
+  'WEBHOOK_SECRET',
+  'TURNSTILE_SECRET_KEY',
+  'RECAPTCHA_SECRET_KEY',
+  'RECAPTCHA_V3_SECRET_KEY',
+  'HCAPTCHA_SECRET_KEY',
+];
+
+function maskSecretValue(value) {
+  const s = String(value || '');
+  if (!s) return '';
+  if (s.length <= 4) return '****';
+  return `****${s.slice(-4)}`;
+}
+
+function isMaskedOrEmptySecret(value) {
+  if (value === undefined || value === null) return true;
+  const s = String(value).trim();
+  if (!s) return true;
+  // 前端回传的脱敏值（**** / ****xxxx）视为「未修改」
+  return s.startsWith('****');
+}
+
+function maskSettingsForClient(settings) {
+  const out = { ...(settings || {}) };
+  for (const key of SECRET_SETTING_KEYS) {
+    if (key in out) out[key] = maskSecretValue(out[key]);
+  }
+  return out;
+}
+
+function isWebAdmin(user) {
+  return Boolean(user && (user.is_admin === 1 || user.is_admin === true || user.is_admin === '1'));
+}
+
+/** 为用户列表附加 is_whitelisted，避免前端 N+1 */
+async function attachWhitelistFlags(db, payload) {
+  if (!payload || !Array.isArray(payload.users)) return payload;
+  const users = await Promise.all(payload.users.map(async (u) => {
+    if (!u) return u;
+    if (u.is_blocked) return { ...u, is_whitelisted: false };
+    try {
+      const whitelisted = await db.isWhitelisted(u.user_id);
+      return { ...u, is_whitelisted: !!whitelisted };
+    } catch {
+      return { ...u, is_whitelisted: false };
+    }
+  }));
+  return { ...payload, users };
+}
 
 export async function onRequest({ request, env, waitUntil }) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -362,6 +415,13 @@ export async function onRequest({ request, env, waitUntil }) {
   if (!sess) return err(t('auth.sessionExpired'), 401);
   const webUser = await db.getWebUserById(sess.userId);
   if (!webUser) return err(t('auth.userNotFound'), 401);
+  const adminUser = isWebAdmin(webUser);
+
+  // 管理类接口需要 is_admin（个人资料除外）
+  const isProfilePath = path.startsWith('/profile/');
+  if (!isProfilePath && !adminUser) {
+    return err(t('auth.forbidden') || t('auth.unauthorized'), 403);
+  }
 
   // 个人资料
   if (path === '/profile/username' && request.method === 'PUT') {
@@ -420,8 +480,10 @@ export async function onRequest({ request, env, waitUntil }) {
     }
   }
 
-  // 设置
-  if (path === '/settings' && request.method === 'GET') return j(await db.getAllSettings());
+  // 设置（GET 脱敏；PUT 忽略脱敏/空密钥字段，视为未修改）
+  if (path === '/settings' && request.method === 'GET') {
+    return j(maskSettingsForClient(await db.getAllSettings()));
+  }
 
   if (path === '/settings' && request.method === 'PUT') {
     try {
@@ -450,17 +512,24 @@ export async function onRequest({ request, env, waitUntil }) {
       ];
 
       let shouldRefreshCommands = false;
+      let botTokenChanged = false;
       for (const key of allowed) {
         if (body[key] === undefined) continue;
+        // 密钥字段：脱敏值或空串 = 保持原值
+        if (SECRET_SETTING_KEYS.includes(key) && isMaskedOrEmptySecret(body[key])) continue;
+
         const value = key === 'BOT_LOCALE'
           ? normalizeBotLocale(body[key])
           : String(body[key]);
         await db.setSetting(key, value);
         if (key === 'BOT_TOKEN' || key === 'BOT_LOCALE') shouldRefreshCommands = true;
+        if (key === 'BOT_TOKEN') botTokenChanged = true;
       }
 
-      const nextBotToken = body.BOT_TOKEN === undefined ? previousBotToken : String(body.BOT_TOKEN || '');
-      if (body.BOT_TOKEN !== undefined && previousBotToken && previousBotToken !== nextBotToken) {
+      const nextBotToken = botTokenChanged
+        ? String(body.BOT_TOKEN || '')
+        : previousBotToken;
+      if (botTokenChanged && previousBotToken && previousBotToken !== nextBotToken) {
         try {
           await new TG(previousBotToken).deleteWebhook({ dropPendingUpdates: false });
         } catch (e) {
@@ -479,7 +548,8 @@ export async function onRequest({ request, env, waitUntil }) {
         }
       }
 
-      return j({ ok: true });
+      // 返回脱敏后的最新设置，方便前端同步展示
+      return j({ ok: true, settings: maskSettingsForClient(await db.getAllSettings()) });
     } catch {
       return err(t('settings.saveFailed'), 500);
     }
@@ -599,7 +669,16 @@ export async function onRequest({ request, env, waitUntil }) {
       if (!sql || !String(sql).trim()) return err(t('common.missingParams'), 400);
 
       const active = await db.getActiveDb();
+      const importPassword = String(password || '');
 
+      // 先解析/解密校验，失败则绝不清空现有数据
+      const parsed = await parseBusinessSql(String(sql), { password: importPassword });
+      const hasAnyRecord = Object.values(parsed).some((items) => Array.isArray(items) && items.length > 0);
+      if (!hasAnyRecord) {
+        return err(t('settings.sqlImportEmpty'), 400);
+      }
+
+      // 校验通过后再清空并导入（importBusinessDataSql 内部会再次 parse，结果一致）
       await db.clearAppDataPreserveWebUsers();
       await importBusinessDataSql({
         sqlText: String(sql),
@@ -607,7 +686,7 @@ export async function onRequest({ request, env, waitUntil }) {
         kvStore: db._kv,
         d1Store: db._d1,
         hyperdriveStore: db._hyperdrive,
-        password: String(password || ''),
+        password: importPassword,
       });
 
       if (db._d1 && active !== 'd1') {
@@ -682,9 +761,11 @@ export async function onRequest({ request, env, waitUntil }) {
     const pageSize = clampPageSize(url.searchParams.get('pageSize'));
     const filter = String(url.searchParams.get('filter') || '').trim();
 
-    if (filter === 'blocked') return j(await db.getBlockedUsers(page, pageSize));
-    if (filter === 'normal') return j(await db.getNormalUsers(page, pageSize));
-    return j(await db.getAllUsers(page, pageSize));
+    let payload;
+    if (filter === 'blocked') payload = await db.getBlockedUsers(page, pageSize);
+    else if (filter === 'normal') payload = await db.getNormalUsers(page, pageSize);
+    else payload = await db.getAllUsers(page, pageSize);
+    return j(await attachWhitelistFlags(db, payload));
   }
 
   const blockMatch = path.match(/^\/users\/(\d+)\/(block|unblock)$/);

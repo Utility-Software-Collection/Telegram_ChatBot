@@ -190,14 +190,20 @@ const selectedLocale = computed({
 
 const showAuthControls = computed(() => route.path !== '/login')
 
-const navItems = computed(() => [
-  { to: '/', icon: 'dashboard', label: t('nav.dashboard') },
-  { to: '/conversations', icon: 'conversations', label: t('nav.conversations') },
-  { to: '/users', icon: 'users', label: t('nav.users') },
-  { to: '/whitelist', icon: 'whitelist', label: t('nav.whitelist') },
-  { to: '/settings', icon: 'settings', label: t('nav.settings') },
-  { to: '/profile', icon: 'profile', label: t('nav.profile') },
-])
+const navItems = computed(() => {
+  const items = [
+    { to: '/', icon: 'dashboard', label: t('nav.dashboard') },
+    { to: '/conversations', icon: 'conversations', label: t('nav.conversations') },
+    { to: '/users', icon: 'users', label: t('nav.users') },
+    { to: '/whitelist', icon: 'whitelist', label: t('nav.whitelist') },
+  ]
+  // 系统设置仅管理员可见（后端仍强制 is_admin）
+  if (auth.isAdmin) {
+    items.push({ to: '/settings', icon: 'settings', label: t('nav.settings') })
+  }
+  items.push({ to: '/profile', icon: 'profile', label: t('nav.profile') })
+  return items
+})
 
 const isWidePage = computed(() => route.path.startsWith('/conversations'))
 
@@ -262,7 +268,8 @@ async function handleAuthExpired() {
 }
 
 async function syncLocaleToBackend() {
-  if (!auth.isLoggedIn) return
+  // 设置写接口需要管理员；非管理员静默跳过
+  if (!auth.isLoggedIn || !auth.isAdmin) return
   try {
     await api.put('/api/settings', { BOT_LOCALE: i18n.locale })
   } catch {}

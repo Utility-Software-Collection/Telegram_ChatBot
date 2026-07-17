@@ -9,6 +9,9 @@ export const AUTH_NOTICE_KEY = 'auth_notice'
 export const AUTH_NOTICE_SESSION_EXPIRED = 'session_expired'
 export const AUTH_EXPIRED_EVENT = 'app:auth-expired'
 
+// 兼容旧版：localStorage.token 仅作迁移期后备，主会话依赖 HttpOnly Cookie
+const LEGACY_TOKEN_KEY = 'token'
+
 function t(key) {
   const locale = normalizeLocale(localStorage.getItem('ui_locale') || 'zh-hans')
   return createT(locale)(key)
@@ -33,7 +36,7 @@ export function consumeAuthNotice() {
 }
 
 export function clearAuthStorage() {
-  localStorage.removeItem('token')
+  localStorage.removeItem(LEGACY_TOKEN_KEY)
   localStorage.removeItem('username')
   localStorage.removeItem('isAdmin')
   clearLocalCache()
@@ -47,28 +50,48 @@ export function markSessionExpired() {
   }
 }
 
+/** 登录成功后统一写入内存态；token 不再落盘（依赖 Set-Cookie） */
+function applySession(data, { keepLegacyToken = false } = {}) {
+  // data.token 仍可能返回给兼容客户端，但默认不写入 localStorage
+  if (keepLegacyToken && data?.token) {
+    localStorage.setItem(LEGACY_TOKEN_KEY, data.token)
+  } else {
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+  }
+  if (data?.username != null) localStorage.setItem('username', data.username)
+  if (data?.isAdmin != null) localStorage.setItem('isAdmin', String(!!data.isAdmin))
+}
+
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref(localStorage.getItem('token') || '')
+  // loggedIn 以 /auth/me 校验结果为准；token 字段仅兼容旧 UI（可能为空）
+  const token = ref(localStorage.getItem(LEGACY_TOKEN_KEY) || '')
   const username = ref(localStorage.getItem('username') || '')
   const isAdmin = ref(localStorage.getItem('isAdmin') === 'true')
+  const sessionReady = ref(false)
 
-  const isLoggedIn = computed(() => !!token.value)
+  // sessionReady：Cookie 会话已由 /auth/me 确认；token：兼容遗留 Bearer
+  const isLoggedIn = computed(() => sessionReady.value || (!!token.value && !!username.value))
 
   async function _doLogin(body) {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(body),
     })
     const data = await readJsonSafe(res, {})
-    if (!res.ok) throw new Error(data.error || t('store.auth.loginFailed'))
-    if (!data.token) throw new Error(t('store.auth.loginFailed'))
-    token.value = data.token
+    if (!res.ok) {
+      const error = new Error(data.error || t('store.auth.loginFailed'))
+      error.status = res.status
+      throw error
+    }
+    if (!data.username) throw new Error(t('store.auth.loginFailed'))
+    // 主会话靠 Cookie；不再依赖 localStorage.token
+    token.value = ''
     username.value = data.username
     isAdmin.value = data.isAdmin || false
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('username', data.username)
-    localStorage.setItem('isAdmin', String(data.isAdmin || false))
+    sessionReady.value = true
+    applySession(data, { keepLegacyToken: false })
     setAuthNotice('')
     return data
   }
@@ -85,16 +108,17 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = ''
     username.value = ''
     isAdmin.value = false
+    sessionReady.value = false
   }
 
   async function logout({ skipRequest = false, keepNotice = false } = {}) {
     if (!skipRequest) {
       try {
-        const storedToken = localStorage.getItem('token') || token.value
+        const legacy = localStorage.getItem(LEGACY_TOKEN_KEY) || token.value
         await fetch('/api/auth/logout', {
           method: 'POST',
           credentials: 'include',
-          headers: storedToken ? { Authorization: `Bearer ${storedToken}` } : {},
+          headers: legacy ? { Authorization: `Bearer ${legacy}` } : {},
         })
       } catch {
         /* noop */
@@ -105,18 +129,15 @@ export const useAuthStore = defineStore('auth', () => {
     if (!keepNotice) setAuthNotice('')
   }
 
-  // 短缓存 + single-flight，避免每次路由导航都打 /auth/me
+  // 短缓存 + single-flight
   let _checkAuthInflight = null
   let _checkAuthCachedAt = 0
   let _checkAuthCachedOk = false
   const CHECK_AUTH_TTL_MS = 15000
 
   async function checkAuth({ force = false } = {}) {
-    const storedToken = localStorage.getItem('token')
-    if (!storedToken) return false
-
     const now = Date.now()
-    if (!force && _checkAuthCachedOk && now - _checkAuthCachedAt < CHECK_AUTH_TTL_MS && token.value) {
+    if (!force && _checkAuthCachedOk && now - _checkAuthCachedAt < CHECK_AUTH_TTL_MS && sessionReady.value && username.value) {
       return true
     }
     if (!force && _checkAuthInflight) return _checkAuthInflight
@@ -124,8 +145,13 @@ export const useAuthStore = defineStore('auth', () => {
     setAuthNotice('')
     _checkAuthInflight = (async () => {
       try {
+        const legacy = localStorage.getItem(LEGACY_TOKEN_KEY) || token.value
+        const headers = {}
+        // 兼容迁移：若仍有旧 token，一并带上；否则纯 Cookie
+        if (legacy) headers.Authorization = `Bearer ${legacy}`
+
         const res = await fetch('/api/auth/me', {
-          headers: { Authorization: `Bearer ${storedToken}` },
+          headers,
           credentials: 'include',
         })
         if (!res.ok) {
@@ -141,14 +167,19 @@ export const useAuthStore = defineStore('auth', () => {
           error.status = res.status
           throw error
         }
-        token.value = storedToken
+
+        // Cookie 会话有效后清理遗留 localStorage token
+        if (legacy) localStorage.removeItem(LEGACY_TOKEN_KEY)
+        token.value = ''
         username.value = data.username
-        isAdmin.value = data.isAdmin
+        isAdmin.value = !!data.isAdmin
+        sessionReady.value = true
+        localStorage.setItem('username', data.username)
+        localStorage.setItem('isAdmin', String(!!data.isAdmin))
         _checkAuthCachedOk = true
         _checkAuthCachedAt = Date.now()
         return true
       } catch (error) {
-        // 仅 401 判定会话失效；网络错误等保留本地会话，避免弱网误踢
         if (error?.status === 401) {
           resetState()
           _checkAuthCachedOk = false
@@ -156,9 +187,9 @@ export const useAuthStore = defineStore('auth', () => {
           markSessionExpired()
           return false
         }
-        // 非 401：若内存里已有登录态，暂视为仍登录
-        if (token.value || storedToken) {
-          token.value = storedToken
+        // 非 401：弱网时若已有用户名则暂视为登录
+        if (username.value) {
+          sessionReady.value = true
           return true
         }
         return false
@@ -170,5 +201,17 @@ export const useAuthStore = defineStore('auth', () => {
     return _checkAuthInflight
   }
 
-  return { token, username, isAdmin, isLoggedIn, login, loginTotp, logout, checkAuth, resetState }
+  return {
+    token,
+    username,
+    isAdmin,
+    isLoggedIn,
+    sessionReady,
+    login,
+    loginTotp,
+    logout,
+    checkAuth,
+    resetState,
+    applySession,
+  }
 })

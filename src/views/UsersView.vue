@@ -313,8 +313,13 @@ async function load() {
     users.value = Array.isArray(d?.users) ? d.users : []
     total.value = Number(d?.total || 0)
     selected.value = []
-    for (const u of users.value) loadAvatar(u.user_id)
-    loadWhitelistFlags(users.value)
+    // 服务端已附带 is_whitelisted，避免 N+1 /whitelist/check
+    const nextWl = { ...wlMap.value }
+    for (const u of users.value) {
+      loadAvatar(u.user_id)
+      nextWl[u.user_id] = u.is_blocked ? false : !!u.is_whitelisted
+    }
+    wlMap.value = nextWl
 
     if (page.value > totalPages.value) {
       page.value = totalPages.value
@@ -332,32 +337,17 @@ function loadAvatar(uid) {
   img.src = `/api/users/${uid}/avatar`
 }
 
-async function loadWhitelistFlags(list) {
-  const next = { ...wlMap.value }
-  await Promise.all((Array.isArray(list) ? list : []).map(async (u) => {
-    // 封禁用户不显示白名单标识
-    if (u.is_blocked) {
-      next[u.user_id] = false
-      return
-    }
-    try {
-      const r = await api.get(`/api/whitelist/check/${u.user_id}`)
-      next[u.user_id] = !!r.whitelisted
-    } catch {
-      next[u.user_id] = false
-    }
-  }))
-  wlMap.value = next
-}
-
 async function openDetail(u) {
   detailUser.value = { ...u }
-  detailIsWl.value = false
+  // 优先用列表已带字段；缺失时再单次查询
+  detailIsWl.value = u.is_blocked ? false : !!u.is_whitelisted
   loadAvatar(u.user_id)
-  try {
-    const r = await api.get(`/api/whitelist/check/${u.user_id}`)
-    detailIsWl.value = r.whitelisted
-  } catch {}
+  if (u.is_whitelisted === undefined && !u.is_blocked) {
+    try {
+      const r = await api.get(`/api/whitelist/check/${u.user_id}`)
+      detailIsWl.value = r.whitelisted
+    } catch {}
+  }
 }
 
 function flash(msg, ok = true) {

@@ -928,6 +928,20 @@ function clampLoginSessionTtl() {
   else form.value.LOGIN_SESSION_TTL = String(v)
 }
 
+const SECRET_FORM_KEYS = [
+  'BOT_TOKEN',
+  'WEBHOOK_SECRET',
+  'TURNSTILE_SECRET_KEY',
+  'RECAPTCHA_SECRET_KEY',
+  'RECAPTCHA_V3_SECRET_KEY',
+  'HCAPTCHA_SECRET_KEY',
+]
+
+function isMaskedSecret(value) {
+  const s = String(value || '').trim()
+  return !s || s.startsWith('****')
+}
+
 async function save() {
   clampTimeout()
   clampInlineKbDelete()
@@ -938,9 +952,21 @@ async function save() {
   try {
     form.value.WEBHOOK_URL = webhookUrl.value || ''
     form.value.MESSAGE_FILTER_RULES = form.value.MESSAGE_FILTER_RULES || '[]'
-    await api.put('/api/settings', form.value)
+    // 脱敏密钥视为未修改：从 payload 中剔除，避免误覆盖
+    const payload = { ...form.value }
+    for (const key of SECRET_FORM_KEYS) {
+      if (isMaskedSecret(payload[key])) delete payload[key]
+    }
+    const r = await api.put('/api/settings', payload)
+    // 后端返回脱敏后的最新设置
+    if (r?.settings) {
+      form.value = { ...form.value, ...r.settings }
+      form.value.WEBHOOK_URL = r.settings.WEBHOOK_URL || webhookUrl.value || ''
+      webhookUrl.value = form.value.WEBHOOK_URL
+    } else {
+      form.value.WEBHOOK_URL = webhookUrl.value || ''
+    }
     saved.value = true
-    form.value.WEBHOOK_URL = webhookUrl.value || ''
     syncSettingsCache()
     toast.success(t('settings.saved'))
     setTimeout(() => { saved.value = false }, 3000)
@@ -955,9 +981,18 @@ async function save() {
 async function testToken() {
   testingTok.value = true
   tokResult.value = null
-  try { tokResult.value = await api.post('/api/settings/test-token', { token: form.value.BOT_TOKEN }) }
-  catch (e) { tokResult.value = { ok: false, err: e.message } }
-  finally { testingTok.value = false }
+  try {
+    const tokenVal = form.value.BOT_TOKEN
+    if (isMaskedSecret(tokenVal)) {
+      tokResult.value = { ok: false, err: t('settings.token.needReenter') || '请重新输入完整 Bot Token 后再测试' }
+      return
+    }
+    tokResult.value = await api.post('/api/settings/test-token', { token: tokenVal })
+  } catch (e) {
+    tokResult.value = { ok: false, err: e.message }
+  } finally {
+    testingTok.value = false
+  }
 }
 
 async function resolveChat(val, which) {
