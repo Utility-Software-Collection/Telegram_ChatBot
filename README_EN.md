@@ -558,9 +558,21 @@ npm run preview
 # equivalent to: node server/index.js
 # open http://localhost:3000
 
+# Stop local server
+npm run stop
+# or press Ctrl+C in the start terminal
+
 # Static-only preview (no API — not for local integration)
 npm run preview:static
 ```
+
+**How to stop the local server:**
+
+| Method | Command / Action | Notes |
+|--------|------------------|-------|
+| Recommended | `npm run stop` | Stops by PID file / listening port |
+| Foreground | `Ctrl+C` in the start terminal | Graceful shutdown |
+| Alias | `npm run server:stop` | Same as `npm run stop` |
 
 > `npm run preview` starts `server/index.js`, serving the UI together with `/api` and `/webhook`.  
 > Running plain `vite preview` (`preview:static`) alone will make `/api/*` requests fail with empty/non-JSON responses.  

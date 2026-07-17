@@ -561,6 +561,8 @@ onMounted(() => {
   opacity:0;transform:scale(.8);transition:var(--tr);box-shadow:0 0 0 2px var(--bg2);
   pointer-events:none;
 }
+:global(:root.glass) .wl-hover-badge{box-shadow:0 0 0 2px rgba(16,18,26,.85)}
+:global(:root.light.glass) .wl-hover-badge{box-shadow:0 0 0 2px rgba(255,255,255,.9)}
 .user-cell:hover .wl-hover-badge{opacity:1;transform:scale(1)}
 .user-cell.is-blocked .wl-hover-badge,
 .user-cell.is-blocked .wl-inline-tag{display:none!important}
@@ -571,9 +573,36 @@ onMounted(() => {
 .user-cell.is-wl:hover .wl-inline-tag{display:inline-flex}
 .ava-img{width:100%;height:100%;object-fit:cover}
 .user-id{font-size:12px;display:inline-block;max-width:130px;overflow:auto}
-.cb{width:14px;height:14px;cursor:pointer;accent-color:var(--accent)}
+.cb{
+  width:14px;
+  height:14px;
+  min-width:14px;
+  min-height:14px;
+  margin:0;
+  padding:0;
+  cursor:pointer;
+  accent-color:var(--accent);
+  background:transparent !important;
+  border:none !important;
+  box-shadow:none !important;
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+  filter:none;
+  transform:translateZ(0);
+  vertical-align:middle;
+}
+/* 表头全选框：在毛玻璃卡片上单独提升合成层，避免顶部描边被滤镜糊掉 */
+.compact-users-table thead .cb{
+  position:relative;
+  z-index:1;
+}
 .row-sel td{background:rgba(79,142,247,.07)!important}
+:global(:root.glass) .row-sel td{background:rgba(79,142,247,.12)!important}
 .batch-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--accent-dim);border:1px solid rgba(79,142,247,.3);border-radius:var(--rs);flex-wrap:wrap}
+:global(:root.glass) .batch-bar{
+  background:linear-gradient(180deg, rgba(79,142,247,.18), rgba(79,142,247,.08));
+  border-color:rgba(79,142,247,.35);
+}
 .batch-actions{align-items:center}
 .batch-actions button{white-space:nowrap}
 .compact-users-table th,

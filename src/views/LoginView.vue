@@ -363,13 +363,29 @@ onBeforeUnmount(() => {
     radial-gradient(ellipse 50% 40% at 20% 80%, rgba(99,102,241,.08), transparent),
     radial-gradient(ellipse 40% 30% at 85% 70%, rgba(79,142,247,.06), transparent);
 }
-:root.light .login-wrap::before{
+:global(:root.light) .login-wrap::before{
   background:
     radial-gradient(ellipse 80% 50% at 50% 0%, rgba(37,99,235,.08), transparent),
     radial-gradient(ellipse 50% 40% at 20% 80%, rgba(99,102,241,.06), transparent),
     radial-gradient(ellipse 40% 30% at 85% 70%, rgba(14,165,233,.04), transparent);
 }
-.login-card{width:100%;max-width:380px;padding:20px 28px 36px;animation:loginIn .4s var(--ease-out);position:relative}
+:global(:root.glass) .login-wrap{
+  background:transparent;
+}
+:global(:root.glass) .login-wrap::before{
+  opacity:.9;
+  background:
+    radial-gradient(ellipse 90% 55% at 50% -5%, rgba(79,142,247,.22), transparent 55%),
+    radial-gradient(ellipse 55% 45% at 15% 85%, rgba(99,102,241,.16), transparent 55%),
+    radial-gradient(ellipse 45% 35% at 90% 70%, rgba(56,189,248,.12), transparent 55%);
+}
+:global(:root.light.glass) .login-wrap::before{
+  background:
+    radial-gradient(ellipse 90% 55% at 50% -5%, rgba(37,99,235,.14), transparent 55%),
+    radial-gradient(ellipse 55% 45% at 15% 85%, rgba(99,102,241,.1), transparent 55%),
+    radial-gradient(ellipse 45% 35% at 90% 70%, rgba(14,165,233,.1), transparent 55%);
+}
+.login-card{width:100%;max-width:380px;padding:20px 28px 36px;animation:loginIn .4s var(--ease-out);position:relative;z-index:1}
 @keyframes loginIn{
   from{opacity:0;transform:translateY(20px) scale(.97)}
   to{opacity:1;transform:translateY(0) scale(1)}

@@ -558,9 +558,21 @@ npm run preview
 # 等价于：node server/index.js
 # 访问 http://localhost:3000
 
+# 停止本地服务
+npm run stop
+# 或在启动终端按 Ctrl+C
+
 # 仅预览静态构建产物（不含 API，不适合联调）
 npm run preview:static
 ```
+
+**停止服务的几种方式：**
+
+| 方式 | 命令 / 操作 | 说明 |
+|------|-------------|------|
+| 推荐 | `npm run stop` | 按 PID 文件 / 端口自动结束本地服务 |
+| 前台 | 启动终端按 `Ctrl+C` | 优雅关闭并释放端口 |
+| 别名 | `npm run server:stop` | 与 `npm run stop` 相同 |
 
 > `npm run preview` 会启动 `server/index.js`，同时提供前端页面与 `/api`、`/webhook`。  
 > 若只运行 `vite preview`（`preview:static`），页面请求 `/api/*` 会拿不到后端 JSON，出现登录/鉴权相关报错。  

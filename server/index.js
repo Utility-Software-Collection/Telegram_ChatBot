@@ -16,6 +16,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10)
 const HOST = process.env.HOST || '0.0.0.0'
 const DISPLAY_HOST = process.env.DISPLAY_HOST
   || (HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST)
+const PID_FILE = path.join(ROOT, '.server.pid')
 
 // ── 全局 polyfill ─────────────────────────────────────────────────────────
 // Cloudflare Workers 全局可用，Node.js 也需要
@@ -215,26 +216,62 @@ if (fs.existsSync(distDir)) {
 
 // ── 启动服务器 ────────────────────────────────────────────────────────────
 
-app.listen(PORT, HOST, () => {
+function writePidFile() {
+  try {
+    fs.writeFileSync(PID_FILE, String(process.pid), 'utf8')
+  } catch (e) {
+    console.warn('[server] 写入 PID 文件失败:', e.message)
+  }
+}
+
+function removePidFile() {
+  try {
+    if (fs.existsSync(PID_FILE)) {
+      const existing = fs.readFileSync(PID_FILE, 'utf8').trim()
+      // 只删除属于当前进程的 PID 文件，避免误删新实例
+      if (!existing || existing === String(process.pid)) fs.unlinkSync(PID_FILE)
+    }
+  } catch {
+    /* noop */
+  }
+}
+
+let shuttingDown = false
+const httpServer = app.listen(PORT, HOST, () => {
+  writePidFile()
   console.log(`[server] 🚀 服务器已启动: http://${DISPLAY_HOST}:${PORT}`)
   console.log(`[server] 📡 Webhook 地址: http://${DISPLAY_HOST}:${PORT}/webhook`)
   console.log(`[server] 🔧 API 地址: http://${DISPLAY_HOST}:${PORT}/api`)
   console.log(`[server] 💾 存储后端: KV${d1 ? ' + D1' : ''}${hyperdrive ? ' + Hyperdrive' : ''}`)
+  console.log(`[server] 🛑 停止服务: Ctrl+C 或 npm run stop`)
 })
+
+function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`[server] 收到 ${signal}，正在关闭...`)
+
+  const forceTimer = setTimeout(() => {
+    console.warn('[server] 关闭超时，强制退出')
+    removePidFile()
+    process.exit(1)
+  }, 5000)
+  if (forceTimer.unref) forceTimer.unref()
+
+  httpServer.close(async () => {
+    try {
+      kv.close()
+      if (d1) d1.close()
+      if (hyperdrive?.close) await hyperdrive.close().catch(() => {})
+    } finally {
+      removePidFile()
+      console.log('[server] 已停止')
+      process.exit(0)
+    }
+  })
+}
 
 // 优雅退出
-process.on('SIGTERM', () => {
-  console.log('[server] 收到 SIGTERM，正在关闭...')
-  kv.close()
-  if (d1) d1.close()
-  if (hyperdrive?.close) hyperdrive.close().catch(() => {})
-  process.exit(0)
-})
-
-process.on('SIGINT', () => {
-  console.log('[server] 收到 SIGINT，正在关闭...')
-  kv.close()
-  if (d1) d1.close()
-  if (hyperdrive?.close) hyperdrive.close().catch(() => {})
-  process.exit(0)
-})
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))
+process.on('exit', removePidFile)

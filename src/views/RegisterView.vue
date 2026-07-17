@@ -64,13 +64,27 @@ async function doRegister() {
     radial-gradient(ellipse 50% 40% at 20% 80%, rgba(99,102,241,.08), transparent),
     radial-gradient(ellipse 40% 30% at 85% 70%, rgba(79,142,247,.06), transparent);
 }
-:root.light .auth-page::before{
+:global(:root.light) .auth-page::before{
   background:
     radial-gradient(ellipse 80% 50% at 50% 0%, rgba(37,99,235,.08), transparent),
     radial-gradient(ellipse 50% 40% at 20% 80%, rgba(99,102,241,.06), transparent),
     radial-gradient(ellipse 40% 30% at 85% 70%, rgba(14,165,233,.04), transparent);
 }
-.auth-card{width:100%;max-width:380px;padding:36px 28px;position:relative;animation:loginIn .4s var(--ease-out)}
+:global(:root.glass) .auth-page{background:transparent}
+:global(:root.glass) .auth-page::before{
+  opacity:.9;
+  background:
+    radial-gradient(ellipse 90% 55% at 50% -5%, rgba(79,142,247,.22), transparent 55%),
+    radial-gradient(ellipse 55% 45% at 15% 85%, rgba(99,102,241,.16), transparent 55%),
+    radial-gradient(ellipse 45% 35% at 90% 70%, rgba(56,189,248,.12), transparent 55%);
+}
+:global(:root.light.glass) .auth-page::before{
+  background:
+    radial-gradient(ellipse 90% 55% at 50% -5%, rgba(37,99,235,.14), transparent 55%),
+    radial-gradient(ellipse 55% 45% at 15% 85%, rgba(99,102,241,.1), transparent 55%),
+    radial-gradient(ellipse 45% 35% at 90% 70%, rgba(14,165,233,.1), transparent 55%);
+}
+.auth-card{width:100%;max-width:380px;padding:36px 28px;position:relative;animation:loginIn .4s var(--ease-out);z-index:1}
 @keyframes loginIn{
   from{opacity:0;transform:translateY(20px) scale(.97)}
   to{opacity:1;transform:translateY(0) scale(1)}

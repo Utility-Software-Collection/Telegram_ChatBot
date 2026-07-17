@@ -8,7 +8,9 @@
     "preview": "node server/index.js",
     "preview:static": "vite preview",
     "server": "node server/index.js",
-    "server:dev": "node --watch server/index.js"
+    "server:dev": "node --watch server/index.js",
+    "stop": "node scripts/stop-server.js",
+    "server:stop": "node scripts/stop-server.js"
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",
