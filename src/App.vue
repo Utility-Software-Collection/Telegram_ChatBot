@@ -262,7 +262,9 @@ function toggleGlass() {
 
 async function handleAuthExpired() {
   await auth.logout({ skipRequest: true, keepNotice: true })
-  if (route.path !== '/login') {
+  // 仅在非登录/注册页触发时做跳转；避开与 beforeEach 守卫的并行导航竞态
+  const authPaths = ['/login', '/register', '/recover']
+  if (!authPaths.includes(route.path)) {
     router.replace('/login')
   }
 }

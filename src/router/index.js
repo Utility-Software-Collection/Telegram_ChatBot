@@ -40,33 +40,32 @@ async function fetchAuthStatus() {
   }
 }
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
 
-  // 始终用 Cookie 会话校验（checkAuth 内部兼容遗留 Bearer）
   // 访问公开页：有效会话则回首页
   if (to.meta.public) {
     const ok = await auth.checkAuth()
-    if (ok) return next('/')
-    return next()
+    if (ok) return '/'
+    return true
   }
 
   const ok = await auth.checkAuth()
   if (ok) {
     // 管理页需要 isAdmin
-    if (to.meta.admin && !auth.isAdmin) return next('/')
-    return next()
+    if (to.meta.admin && !auth.isAdmin) return '/'
+    return true
   }
 
   // 未登录
   const needFirst = await fetchAuthStatus()
   if (needFirst) {
-    if (AUTH_PUBLIC_PATHS.has(to.path)) return next()
-    return next('/register')
+    if (AUTH_PUBLIC_PATHS.has(to.path)) return true
+    return '/register'
   }
 
-  if (to.meta.public || AUTH_PUBLIC_PATHS.has(to.path)) return next()
-  return next('/login')
+  if (to.meta.public || AUTH_PUBLIC_PATHS.has(to.path)) return true
+  return '/login'
 })
 
 export default router

@@ -10,6 +10,7 @@ dist/
 .vscode/
 .vscode-test/
 .idea/
+.claude/
 
 # 本地构建与调试缓存
 .cache/
