@@ -173,6 +173,22 @@ export const useAuthStore = defineStore('auth', () => {
           headers,
           credentials: 'include',
         })
+
+        // 401 直接处理，不抛出 Error，避免浏览器控制台打印"未授权"错误
+        if (res.status === 401) {
+          const hadSession = sessionReady.value || !!username.value
+          resetState()
+          _checkAuthCachedOk = false
+          _checkAuthCachedAt = 0
+          _checkAuthFailedAt = Date.now()
+          // 仅在确实有过有效会话时才设"登录已过期"通知；
+          // 首次打开页面或刚退出登录时不应提示过期，避免误导用户。
+          if (hadSession) {
+            setAuthNotice(AUTH_NOTICE_SESSION_EXPIRED)
+          }
+          return false
+        }
+
         if (!res.ok) {
           const data = await readJsonSafe(res, {})
           const error = new Error(data?.error || t('store.auth.loginFailed'))
@@ -200,20 +216,7 @@ export const useAuthStore = defineStore('auth', () => {
         _checkAuthFailedAt = 0
         return true
       } catch (error) {
-        if (error?.status === 401) {
-          const hadSession = sessionReady.value || !!username.value
-          resetState()
-          _checkAuthCachedOk = false
-          _checkAuthCachedAt = 0
-          _checkAuthFailedAt = Date.now()
-          // 仅在确实有过有效会话时才设"登录已过期"通知；
-          // 首次打开页面或刚退出登录时不应提示过期，避免误导用户。
-          if (hadSession) {
-            setAuthNotice(AUTH_NOTICE_SESSION_EXPIRED)
-          }
-          return false
-        }
-        // 非 401：弱网时若已有用户名则暂视为登录
+        // 非 401 错误：弱网时若已有用户名则暂视为登录
         if (username.value) {
           sessionReady.value = true
           return true
