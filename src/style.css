@@ -517,7 +517,7 @@ button:active{transform:scale(.97)}
 
 /* ── Tables ──────────────────────────────────────────────────────────────── */
 .table{width:100%;border-collapse:collapse}
-.table th,.table td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);font-size:13px}
+.table th,.table td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle}
 .table th{color:var(--text2);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
 .table tr:hover td{background:var(--bg3)}.table tr:last-child td{border-bottom:none}
 
@@ -877,20 +877,30 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0.4 }
 pre, code { background: var(--bg3); color: var(--text); border-radius: var(--rs); }
 code { padding: 2px 6px; }
 pre { padding: 10px 14px; overflow-x: auto; font-size: 13px; }
-/* 可复制 Telegram ID 芯片：避免 code 背景贴数字 */
+/* 可复制 UID：外观与周围文字一致，点击复制 */
 .id-copy{
-  appearance:none;border:1px solid var(--border);background:var(--bg3);padding:5px 10px;margin:0;cursor:pointer;
-  color:var(--text2);font:inherit;display:inline-flex;align-items:center;justify-content:center;
-  min-width:118px;border-radius:8px;transition:var(--tr);line-height:1.2;vertical-align:middle;
+  appearance:none;border:0;background:transparent;padding:0;margin:0;cursor:pointer;
+  color:inherit;font:inherit;font-size:inherit;line-height:inherit;
+  display:inline;vertical-align:baseline;box-sizing:border-box;
+  font-variant-numeric:tabular-nums;letter-spacing:inherit;
+  transition:color .15s ease;
 }
 .id-copy code{
   background:transparent!important;padding:0!important;border-radius:0;color:inherit;
-  font-size:12px;letter-spacing:.02em;font-variant-numeric:tabular-nums;
+  font:inherit;font-size:inherit;line-height:inherit;letter-spacing:inherit;
+  font-variant-numeric:tabular-nums;white-space:nowrap;
 }
-.id-copy:hover{color:var(--accent);border-color:rgba(79,142,247,.35);background:var(--accent-dim)}
-.id-copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-:root.glass .id-copy{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12)}
-:root.light.glass .id-copy{background:rgba(15,23,42,.04);border-color:rgba(148,163,184,.28)}
+.id-copy:hover,
+.id-copy:hover code{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.id-copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+/* 「ID: 123」行内组合 */
+.id-inline{
+  display:inline;min-width:0;max-width:100%;
+  vertical-align:baseline;line-height:inherit;font-size:inherit;color:inherit;
+}
+.id-inline > .id-label{font:inherit;font-size:inherit;line-height:inherit;color:inherit}
+.id-inline > .id-copy{font:inherit;font-size:inherit;line-height:inherit}
 
 /* Profile page - ensure card uses theme vars */
 .profile-section { max-width: 540px; margin: 0 auto; }

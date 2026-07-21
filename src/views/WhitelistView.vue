@@ -70,14 +70,21 @@
                     <div class="user-cell-line">
                       <span class="u-name">{{ formatDisplayName(u) }}</span>
                       <span class="user-cell-sep">·</span>
-                      <span class="user-cell-meta">{{ u.username ? '@' + u.username : '—' }}</span>
+                      <span class="user-cell-meta">
+                        <button
+                          v-if="u.username"
+                          type="button"
+                          class="id-copy"
+                          :title="t('common.copy')"
+                          @click="copyUsername(u.username)"
+                        >@{{ u.username }}</button>
+                        <template v-else>—</template>
+                      </span>
                     </div>
                   </div>
                 </td>
                 <td class="hide-mobile">
-                  <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(u.user_id)">
-                    <code class="user-id">{{ u.user_id }}</code>
-                  </button>
+                  <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(u.user_id)">{{ u.user_id }}</button>
                 </td>
                 <td class="text-muted text-sm">{{ u.reason || '—' }}</td>
                 <td class="hide-mobile text-muted text-sm">{{ fmtDate(u.created_at) }}</td>
@@ -187,6 +194,29 @@ async function copyTelegramId(id) {
   }
 }
 
+async function copyUsername(username) {
+  const raw = String(username || '').replace(/^@/, '').trim()
+  if (!raw) return
+  const val = `@${raw}`
+  try {
+    if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(val)
+    else {
+      const ta = document.createElement('textarea')
+      ta.value = val
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success(t('users.flash.copySuccess', { label: t('users.copyUsername') }))
+  } catch (e) {
+    toast.error(t('users.flash.copyFailed', { err: e?.message || 'unknown' }))
+  }
+}
+
 async function load() {
   loading.value = true
   try {
@@ -257,32 +287,12 @@ onMounted(load)
 .u-ava{width:32px;height:32px;border-radius:50%;flex-shrink:0;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;overflow:hidden}
 .ava-img{width:100%;height:100%;object-fit:cover}
 .user-id{
-  font-size:12px;
-  display:inline-block;
-  background:transparent!important;
-  border-radius:0;
-  padding:0;
-  letter-spacing:.02em;
-  font-variant-numeric:tabular-nums;
+  font:inherit;font-size:inherit;line-height:inherit;
+  display:inline;background:transparent!important;border-radius:0;padding:0;
+  font-variant-numeric:tabular-nums;color:inherit;
 }
-.id-copy{
-  appearance:none;border:1px solid var(--border);background:var(--bg3);padding:5px 10px;margin:0;cursor:pointer;
-  color:var(--text2);font:inherit;display:inline-flex;align-items:center;justify-content:center;
-  min-width:118px;border-radius:8px;transition:var(--tr);line-height:1.2;
-}
-.id-copy:hover{
-  color:var(--accent);border-color:rgba(79,142,247,.35);background:var(--accent-dim);
-}
+.id-copy:hover,
 .id-copy:hover code{color:var(--accent)}
-.id-copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-:global(:root.glass) .id-copy{
-  background:rgba(255,255,255,.06);
-  border-color:rgba(255,255,255,.12);
-}
-:global(:root.light.glass) .id-copy{
-  background:rgba(15,23,42,.04);
-  border-color:rgba(148,163,184,.28);
-}
 @media (max-width:768px){
   .page{max-width:100%}
   .quick-row > *{min-width:0}

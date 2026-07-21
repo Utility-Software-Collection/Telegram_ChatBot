@@ -34,6 +34,19 @@ api.interceptors.request.use(config => {
   // 兼容迁移期：若仍有遗留 localStorage token 则附带；主路径依赖 Cookie
   const token = localStorage.getItem('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
+
+  // FormData 上传时不要强制 application/json，让浏览器自动带 multipart boundary
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    if (config.headers) {
+      if (typeof config.headers.set === 'function') {
+        config.headers.set('Content-Type', undefined)
+        config.headers.delete?.('Content-Type')
+      } else {
+        delete config.headers['Content-Type']
+        delete config.headers['content-type']
+      }
+    }
+  }
   return config
 })
 

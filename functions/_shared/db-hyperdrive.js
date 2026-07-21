@@ -591,4 +591,10 @@ export class HyperdriveStore {
     await this._execute('DELETE FROM settings')
     await this.setSetting('ACTIVE_DB', activeDb)
   }
+
+  async clearAppDataIncludingWebUsers(activeDb = 'hyperdrive') {
+    await this.clearAppDataPreserveWebUsers(activeDb)
+    await this._execute('DELETE FROM web_users')
+    await this.setSetting('ACTIVE_DB', activeDb)
+  }
 }

@@ -48,8 +48,15 @@
           </div>
           <div style="flex:1;min-width:0">
             <div class="hdr-name">{{ selUser.first_name }} {{ selUser.last_name }}</div>
-            <div class="text-muted text-sm" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-              ID: <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(selUser.user_id)"><code>{{ selUser.user_id }}</code></button>{{ selUser.username ? ' · @' + selUser.username : '' }}
+            <div class="hdr-meta text-muted text-sm">
+              <span class="id-inline">
+                <span class="id-label">{{ t('common.id') }}: </span>
+                <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(selUser.user_id)">{{ selUser.user_id }}</button>
+              </span>
+              <template v-if="selUser.username">
+                <span class="hdr-sep"> · </span>
+                <button type="button" class="id-copy" :title="t('common.copy')" @click="copyUsername(selUser.username)">@{{ selUser.username }}</button>
+              </template>
             </div>
           </div>
           <span class="badge" :class="selUser.is_blocked ? 'badge-danger' : 'badge-success'">
@@ -74,16 +81,62 @@
               <div class="empty-state-title">{{ t('conv.msgEmpty') }}</div>
             </div>
             <div v-for="m in dedupedMsgs" :key="m.id" class="msg-wrap" :class="m.direction">
-              <div class="msg-bubble">
-                <div class="msg-type-badge" v-if="m.message_type && m.message_type !== 'text'">
-                  {{ typeLabel(m.message_type) }}
-                </div>
-                <div class="msg-text" v-if="m.content && m.content !== t('conv.media')">{{ m.content }}</div>
-                <div class="msg-text text-muted" v-else-if="m.message_type !== 'text'">[{{ typeLabel(m.message_type) }}]</div>
+              <div class="msg-bubble" :class="{ 'msg-bubble--media': isVisualMedia(m) }">
+                <template v-if="isVisualMedia(m)">
+                  <img
+                    v-if="mediaFileId(m)"
+                    class="msg-media"
+                    :class="{ 'msg-media--sticker': m.message_type === 'sticker' }"
+                    :src="mediaUrl(m)"
+                    :alt="typeLabel(m.message_type)"
+                    loading="lazy"
+                    @error="onMediaError($event, m)"
+                  />
+                  <div v-if="mediaCaption(m)" class="msg-text msg-caption">{{ mediaCaption(m) }}</div>
+                  <div v-else-if="!mediaFileId(m)" class="msg-text text-muted">[{{ typeLabel(m.message_type) }}]</div>
+                </template>
+                <template v-else>
+                  <div class="msg-type-badge" v-if="m.message_type && m.message_type !== 'text'">
+                    {{ typeLabel(m.message_type) }}
+                  </div>
+                  <div class="msg-text" v-if="displayText(m)">{{ displayText(m) }}</div>
+                  <div class="msg-text text-muted" v-else-if="m.message_type !== 'text'">[{{ typeLabel(m.message_type) }}]</div>
+                </template>
                 <div class="msg-meta">{{ fmtFull(m.created_at) }}</div>
               </div>
             </div>
           </template>
+        </div>
+
+        <div class="composer">
+          <div v-if="pendingFile" class="composer-attach">
+            <span class="composer-attach-name">{{ pendingFile.name }}</span>
+            <button type="button" class="btn-ghost btn-sm" @click="clearPendingFile">{{ t('common.cancel') }}</button>
+          </div>
+          <div class="composer-row">
+            <input
+              ref="fileInput"
+              type="file"
+              class="composer-file-input"
+              accept="image/*,.pdf,.zip,.doc,.docx,.xls,.xlsx,.txt,.csv,application/*"
+              @change="onPickFile"
+            />
+            <button type="button" class="btn-ghost btn-sm composer-icon-btn" :title="t('conv.attach')" @click="fileInput?.click()" :disabled="sending || !!selUser?.is_blocked">
+              <AppIcon name="add" :size="16" />
+            </button>
+            <textarea
+              v-model="draft"
+              class="composer-input"
+              rows="1"
+              :placeholder="selUser?.is_blocked ? t('conv.blockedHint') : t('conv.inputPh')"
+              :disabled="sending || !!selUser?.is_blocked"
+              @keydown.enter.exact.prevent="sendText"
+            />
+            <button type="button" class="btn-primary btn-sm composer-send-btn" :disabled="!canSend || sending || !!selUser?.is_blocked" @click="sendCurrent">
+              <span v-if="sending" class="spinner"></span>
+              <template v-else>{{ t('conv.send') }}</template>
+            </button>
+          </div>
         </div>
       </template>
       <div v-else class="conv-placeholder">
@@ -115,9 +168,18 @@ const search = ref(''), loadingList = ref(true), loadingMsgs = ref(false), msgRe
 const mobileView = ref('list')
 const avatars = ref({})
 const msgRequestToken = ref(0)
+const draft = ref('')
+const sending = ref(false)
+const pendingFile = ref(null)
+const fileInput = ref(null)
 
 const CONV_LIST_CACHE_KEY = 'conversations:list'
 const CONVERSATION_PAGE_SIZE = 50
+
+const canSend = computed(() => {
+  if (pendingFile.value) return true
+  return String(draft.value || '').trim().length > 0
+})
 
 const filtered = computed(() => {
   if (!search.value) return convs.value
@@ -224,12 +286,110 @@ async function selectUser(c) {
 
     tryLoadAvatar(uid)
     updateConv(uid, { ...c, ...(detail?.user || {}) })
-    await nextTick()
-    if (msgRef.value) msgRef.value.scrollTop = msgRef.value.scrollHeight
+    await scrollToBottom(true)
   } finally {
     if (requestToken === msgRequestToken.value && selId.value === uid) {
       loadingMsgs.value = false
+      await scrollToBottom(true)
     }
+  }
+}
+
+async function scrollToBottom(force = false) {
+  await nextTick()
+  // 再等一帧，确保消息 DOM 渲染完成
+  await new Promise((r) => requestAnimationFrame(() => r()))
+  const el = msgRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+  if (force) {
+    // 部分浏览器首次布局后高度会变，再补一次
+    setTimeout(() => {
+      if (msgRef.value) msgRef.value.scrollTop = msgRef.value.scrollHeight
+    }, 30)
+  }
+}
+
+function onPickFile(e) {
+  const file = e?.target?.files?.[0]
+  if (!file) return
+  if (file.size > 20 * 1024 * 1024) {
+    toast.error(t('conv.fileTooLarge'))
+    if (e?.target) e.target.value = ''
+    return
+  }
+  pendingFile.value = file
+}
+
+function clearPendingFile() {
+  pendingFile.value = null
+  if (fileInput.value) fileInput.value.value = ''
+}
+
+async function sendText() {
+  if (pendingFile.value) return sendCurrent()
+  const text = String(draft.value || '').trim()
+  if (!text || !selUser.value || sending.value || selUser.value.is_blocked) return
+  sending.value = true
+  try {
+    const res = await api.post(`/api/conversations/${selUser.value.user_id}`, { kind: 'text', text })
+    const msg = res?.message
+    if (msg) {
+      msgs.value = [...msgs.value, msg]
+      updateConv(selUser.value.user_id, {
+        last_message: text,
+        last_direction: 'outgoing',
+        last_at: msg.created_at || new Date().toISOString(),
+      })
+    }
+    draft.value = ''
+    await scrollToBottom(true)
+  } catch (e) {
+    toast.error(e.message || t('conv.sendFailed'))
+  } finally {
+    sending.value = false
+  }
+}
+
+async function sendCurrent() {
+  if (!selUser.value || sending.value || selUser.value.is_blocked) return
+  if (pendingFile.value) return sendFile()
+  return sendText()
+}
+
+async function sendFile() {
+  const file = pendingFile.value
+  if (!file || !selUser.value) return
+  sending.value = true
+  try {
+    const form = new FormData()
+    const isImage = String(file.type || '').startsWith('image/')
+    form.append('kind', isImage ? 'photo' : 'document')
+    form.append('file', file, file.name)
+    const cap = String(draft.value || '').trim()
+    if (cap) form.append('caption', cap)
+
+    // axios 实例默认 application/json；multipart 需去掉 Content-Type 让浏览器带 boundary
+    const res = await api.post(`/api/conversations/${selUser.value.user_id}`, form, {
+      headers: { 'Content-Type': undefined },
+      timeout: 120000,
+    })
+    const msg = res?.message
+    if (msg) {
+      msgs.value = [...msgs.value, msg]
+      updateConv(selUser.value.user_id, {
+        last_message: msg.content || file.name,
+        last_direction: 'outgoing',
+        last_at: msg.created_at || new Date().toISOString(),
+      })
+    }
+    draft.value = ''
+    clearPendingFile()
+    await scrollToBottom(true)
+  } catch (e) {
+    toast.error(e.message || t('conv.sendFailed'))
+  } finally {
+    sending.value = false
   }
 }
 
@@ -317,6 +477,29 @@ async function copyTelegramId(id) {
     toast.error(t('users.flash.copyFailed', { err: e?.message || 'unknown' }))
   }
 }
+
+async function copyUsername(username) {
+  const raw = String(username || '').replace(/^@/, '').trim()
+  if (!raw) return
+  const val = `@${raw}`
+  try {
+    if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(val)
+    else {
+      const ta = document.createElement('textarea')
+      ta.value = val
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success(t('users.flash.copySuccess', { label: t('users.copyUsername') }))
+  } catch (e) {
+    toast.error(t('users.flash.copyFailed', { err: e?.message || 'unknown' }))
+  }
+}
 function updateConv(uid, patch) {
   const i = convs.value.findIndex(c => c.user_id === uid)
   if (i >= 0) {
@@ -357,6 +540,64 @@ function typeLabel(type) {
     poll: t('conv.type.poll'),
     dice: t('conv.type.dice'),
   }[type] || type
+}
+
+const VISUAL_TYPES = new Set(['photo', 'sticker', 'animation'])
+
+function isVisualMedia(m) {
+  return VISUAL_TYPES.has(String(m?.message_type || ''))
+}
+
+function unpackMedia(content) {
+  const s = String(content || '')
+  if (!s) return { fileId: '', caption: '' }
+  const i = s.indexOf('\n')
+  if (i < 0) {
+    if (/^[A-Za-z0-9_\-]{10,}$/.test(s)) return { fileId: s, caption: '' }
+    return { fileId: '', caption: s }
+  }
+  return { fileId: s.slice(0, i).trim(), caption: s.slice(i + 1) }
+}
+
+function mediaFileId(m) {
+  if (!isVisualMedia(m)) return ''
+  return unpackMedia(m?.content).fileId
+}
+
+function mediaCaption(m) {
+  if (!isVisualMedia(m)) return ''
+  return unpackMedia(m?.content).caption
+}
+
+function mediaUrl(m) {
+  const id = mediaFileId(m)
+  if (!id) return ''
+  return `/api/tg/file?file_id=${encodeURIComponent(id)}`
+}
+
+function displayText(m) {
+  const type = String(m?.message_type || 'text')
+  const content = String(m?.content || '')
+  if (!content) return ''
+  if (type === 'text') return content
+  if (isVisualMedia(m)) return mediaCaption(m)
+  const { fileId, caption } = unpackMedia(content)
+  if (fileId && caption) return caption
+  if (content === t('conv.media') || content === '[photo]' || content === '[document]') return ''
+  if (fileId && !caption && /^[A-Za-z0-9_\-]{10,}$/.test(fileId)) return ''
+  return content
+}
+
+function onMediaError(e) {
+  const el = e?.target
+  if (!el) return
+  el.style.display = 'none'
+  const fallback = document.createElement('div')
+  fallback.className = 'msg-text text-muted'
+  fallback.textContent = `[${typeLabel(el.closest('.msg-wrap')?.querySelector?.('.msg-type-badge')?.textContent) || t('conv.media')}]`
+  // 简单占位
+  fallback.textContent = `[${t('conv.media')}]`
+  el.parentElement?.insertBefore(fallback, el)
 }
 
 onMounted(async () => {
@@ -435,9 +676,16 @@ onMounted(async () => {
   border-bottom-color:rgba(148,163,184,.22);
 }
 .hdr-ava{width:38px;height:38px;border-radius:50%;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0;overflow:hidden}
-.hdr-name{font-weight:600;font-size:14px}
-/* id-copy 样式由全局 style.css 统一提供 */
-.msg-list{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.hdr-name{font-weight:600;font-size:14px;line-height:1.3}
+.hdr-meta{
+  display:flex;align-items:center;gap:6px;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  line-height:1.4;
+}
+.hdr-username{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
+.hdr-sep{flex-shrink:0;line-height:1.4}
+/* id-copy / id-inline 样式由全局 style.css 统一提供 */
+.msg-list{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-height:0}
 .msg-wrap{display:flex}
 .msg-wrap.incoming{justify-content:flex-start}
 .msg-wrap.outgoing{justify-content:flex-end}
@@ -455,8 +703,48 @@ onMounted(async () => {
 .outgoing .msg-bubble{background:var(--accent-dim);border:1px solid rgba(79,142,247,.25);border-bottom-right-radius:4px;transition:var(--tr)}
 .outgoing .msg-bubble:hover{background:color-mix(in srgb,var(--accent-dim),var(--accent) 8%)}
 .msg-type-badge{font-size:11px;color:var(--text3);margin-bottom:3px}
-.msg-text{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.msg-text{
+  white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
+  font-family:inherit,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif;
+}
+.msg-caption{margin-top:6px}
+.msg-bubble--media{padding:6px}
+.msg-media{
+  display:block;max-width:min(280px,70vw);max-height:320px;width:auto;height:auto;
+  border-radius:10px;object-fit:contain;background:rgba(0,0,0,.04);
+}
+.msg-media--sticker{
+  max-width:160px;max-height:160px;background:transparent;border-radius:0;
+}
 .msg-meta{font-size:10px;color:var(--text3);margin-top:4px;text-align:right}
+.composer{
+  flex-shrink:0;border-top:1px solid var(--border);background:var(--bg2);padding:10px 12px;display:flex;flex-direction:column;gap:8px;
+}
+:global(:root.glass) .composer{background:rgba(255,255,255,.04);border-top-color:rgba(255,255,255,.08)}
+:global(:root.light.glass) .composer{background:rgba(255,255,255,.35);border-top-color:rgba(148,163,184,.22)}
+.composer-row{display:flex;align-items:center;gap:8px;min-height:40px}
+.composer-input{
+  flex:1;min-width:0;resize:none;height:40px;min-height:40px;max-height:120px;padding:0 12px;
+  border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);
+  font:inherit;line-height:38px;box-sizing:border-box;
+  font-family:inherit,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif;
+}
+.composer-input:focus{outline:none;border-color:var(--accent)}
+.composer-file-input{display:none}
+.composer-icon-btn{
+  height:40px!important;width:40px!important;min-height:40px;min-width:40px;
+  padding:0!important;margin:0;flex-shrink:0;
+  display:inline-flex!important;align-items:center;justify-content:center;
+  border-radius:var(--rs);box-sizing:border-box;line-height:1;
+}
+.composer-row > .btn-primary.btn-sm,
+.composer-send-btn{
+  height:40px!important;min-height:40px;min-width:64px;padding:0 14px!important;margin:0;flex-shrink:0;
+  display:inline-flex!important;align-items:center;justify-content:center;
+  border-radius:var(--rs);box-sizing:border-box;line-height:1;font-size:13px;
+}
+.composer-attach{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--text2);padding:4px 2px}
+.composer-attach-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .conv-placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--text3)}
 .placeholder-icon{color:var(--text3)}
 .empty{text-align:center;color:var(--text3);font-size:13px;padding:30px}

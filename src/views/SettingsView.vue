@@ -90,7 +90,7 @@
                   <AppIcon :name="groupInfo.type === 'supergroup' ? 'users' : 'conversations'" :size="18" />
                   <div>
                     <div style="font-weight:600">{{ groupInfo.title }}</div>
-                    <div class="text-muted text-sm">{{ t('common.id') }}: <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(groupInfo.id)"><code>{{ groupInfo.id }}</code></button></div>
+                    <div class="text-muted text-sm"><span class="id-inline"><span class="id-label">{{ t('common.id') }}: </span><button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(groupInfo.id)">{{ groupInfo.id }}</button></span></div>
                   </div>
                   <button class="btn-primary btn-sm utility-btn" @click="form.FORUM_GROUP_ID = String(groupInfo.id)">{{ t('settings.use') }}</button>
                 </div>
@@ -108,7 +108,7 @@
                   <AppIcon :name="{ supergroup: 'users', channel: 'link' }[customInfo.type] || 'conversations'" :size="18" />
                   <div style="flex:1">
                     <div>{{ customInfo.title || customInfo.first_name }}</div>
-                    <div class="text-muted text-sm">{{ t('common.id') }}: <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(customInfo.id)"><code>{{ customInfo.id }}</code></button></div>
+                    <div class="text-muted text-sm"><span class="id-inline"><span class="id-label">{{ t('common.id') }}: </span><button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(customInfo.id)">{{ customInfo.id }}</button></span></div>
                   </div>
                   <button class="btn-ghost btn-sm utility-btn" @click="form.FORUM_GROUP_ID = String(customInfo.id)">{{ t('settings.useId') }}</button>
                   <button class="btn-ghost btn-sm utility-btn" @click="addAdmin(String(customInfo.id))">{{ t('settings.setAdmin') }}</button>
@@ -133,9 +133,18 @@
                       <div class="admin-card-line">
                         <span class="admin-card-name">{{ adminDisplayName(id) }}</span>
                         <span class="admin-card-sep">·</span>
-                        <span class="admin-card-meta">{{ adminSecondaryLine(id) }}</span>
+                        <span class="admin-card-meta">
+                          <button
+                            v-if="getAdminProfile(id).username"
+                            type="button"
+                            class="id-copy"
+                            :title="t('common.copy')"
+                            @click="copyUsername(getAdminProfile(id).username)"
+                          >@{{ getAdminProfile(id).username }}</button>
+                          <template v-else>{{ adminSecondaryLine(id) }}</template>
+                        </span>
                         <span class="admin-card-sep">·</span>
-                        <span class="admin-card-id">{{ t('common.id') }}: <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(id)">{{ id }}</button></span>
+                        <span class="admin-card-id id-inline"><span class="id-label">{{ t('common.id') }}: </span><button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(id)">{{ id }}</button></span>
                       </div>
                     </div>
                     <button class="btn-ghost btn-sm admin-card-remove" @click="removeAdmin(i)">
@@ -515,15 +524,12 @@
                   </div>
                   <div class="sql-tools-actions">
                     <input
-                      v-model="sqlExportPassword"
+                      v-model="sqlPassword"
                       type="password"
                       :placeholder="t('settings.storage.sqlAesPassword')"
                       style="min-width:180px"
+                      autocomplete="new-password"
                     />
-                    <label class="sql-secrets-toggle text-sm" :title="t('settings.storage.sqlIncludeSecretsHint')">
-                      <input type="checkbox" v-model="sqlIncludeSecrets" />
-                      {{ t('settings.storage.sqlIncludeSecrets') }}
-                    </label>
                     <button class="btn-ghost btn-sm" :disabled="sqlBusy" @click="exportSql">
                       <span v-if="sqlExporting" class="spinner"></span>{{ sqlExporting ? '…' : t('settings.storage.sqlExport') }}
                     </button>
@@ -538,13 +544,6 @@
                       @change="handleSqlFileChange"
                     />
                   </div>
-                </div>
-                <div class="row-g" style="margin-top:8px">
-                  <input
-                    v-model="sqlImportPassword"
-                    type="password"
-                    :placeholder="t('settings.storage.sqlAesPasswordImport')"
-                  />
                 </div>
                 <div v-if="sqlFileName" class="form-hint mt-1 sql-file-name">
                   <code>{{ sqlFileName }}</code>
@@ -615,9 +614,8 @@ const dbInfo = ref({ active: 'kv', hasD1: false, hasHyperdrive: false }), dbSwit
 const clearingData = ref(false)
 const sqlExporting = ref(false), sqlImporting = ref(false), sqlMsg = ref(''), sqlOk = ref(true), sqlFileName = ref('')
 const sqlFileInput = ref(null)
-const sqlExportPassword = ref('')
-const sqlIncludeSecrets = ref(false)
-const sqlImportPassword = ref('')
+// 导入/导出共用同一加密密码
+const sqlPassword = ref('')
 const messageFilterType = ref('text')
 const messageFilterValue = ref('')
 const messageFilterErr = ref('')
@@ -735,6 +733,29 @@ async function copyTelegramId(id) {
       document.body.removeChild(ta)
     }
     toast.success(t('users.flash.copySuccess', { label: t('users.copyUid') }))
+  } catch (e) {
+    toast.error(t('users.flash.copyFailed', { err: e?.message || 'unknown' }))
+  }
+}
+
+async function copyUsername(username) {
+  const raw = String(username || '').replace(/^@/, '').trim()
+  if (!raw) return
+  const val = `@${raw}`
+  try {
+    if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(val)
+    else {
+      const ta = document.createElement('textarea')
+      ta.value = val
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success(t('users.flash.copySuccess', { label: t('users.copyUsername') }))
   } catch (e) {
     toast.error(t('users.flash.copyFailed', { err: e?.message || 'unknown' }))
   }
@@ -1084,7 +1105,7 @@ async function exportSql() {
     if (token) headers.Authorization = `Bearer ${token}`
     if (locale) headers['X-Locale'] = locale
 
-    if (!sqlExportPassword.value) {
+    if (!sqlPassword.value) {
       throw new Error(t('settings.storage.sqlAesPasswordRequired'))
     }
 
@@ -1095,8 +1116,7 @@ async function exportSql() {
       headers,
       credentials: 'include',
       body: JSON.stringify({
-        password: sqlExportPassword.value,
-        includeSecrets: !!sqlIncludeSecrets.value,
+        password: sqlPassword.value,
       }),
     })
 
@@ -1141,7 +1161,7 @@ async function handleSqlFileChange(event) {
   if (!file) return
 
   const isLegacySql = /\.sql$/i.test(file.name)
-  if (!isLegacySql && !sqlImportPassword.value) {
+  if (!isLegacySql && !sqlPassword.value) {
     toast.error(t('settings.storage.sqlAesPasswordRequired'))
     if (event?.target) event.target.value = ''
     return
@@ -1165,7 +1185,7 @@ async function handleSqlFileChange(event) {
   try {
     // 旧明文 .sql 直接文本；加密 .db 以 base64 上传，避免 JSON 损坏二进制
     const sql = isLegacySql ? await file.text() : await fileToBase64(file)
-    await api.post('/api/settings/sql/import', { sql, password: sqlImportPassword.value || '' }, { timeout: 5 * 60 * 1000 })
+    await api.post('/api/settings/sql/import', { sql, password: sqlPassword.value || '' }, { timeout: 5 * 60 * 1000 })
     await load(true)
     sqlMsg.value = t('settings.storage.sqlImported', { name: file.name })
     sqlOk.value = true
@@ -1252,12 +1272,12 @@ onMounted(load)
 .admin-card-avatar{width:42px;height:42px;border-radius:50%;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;overflow:hidden}
 .admin-card-avatar-img{width:100%;height:100%;object-fit:cover}
 .admin-card-info{min-width:0}
-.admin-card-line{display:flex;align-items:baseline;gap:6px;min-width:0;white-space:nowrap}
+.admin-card-line{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap}
 .admin-card-name,.admin-card-meta,.admin-card-id{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.admin-card-name{font-size:13px;font-weight:600;color:var(--text)}
-.admin-card-meta{font-size:12px;color:var(--text2)}
-.admin-card-id{font-size:12px;color:var(--text3)}
-/* id-copy 样式由全局 style.css 统一提供 */
+.admin-card-name{font-size:13px;font-weight:600;color:var(--text);line-height:1.4}
+.admin-card-meta{font-size:12px;color:var(--text2);line-height:1.4}
+.admin-card-id{font-size:12px;color:var(--text3);flex-shrink:0;overflow:visible}
+/* id-copy / id-inline 样式由全局 style.css 统一提供 */
 .admin-card-sep{color:var(--text3);flex-shrink:0}
 .admin-card-remove{position:absolute;top:50%;right:8px;transform:translateY(-50%);padding:2px 6px;line-height:1;align-self:auto}
 .message-filter-guide{display:flex;flex-direction:column;gap:10px;margin-top:12px}

@@ -579,4 +579,19 @@ export class KVStore {
     this.cache.clear()
     _listCache.clear()
   }
+
+  /** 清空全部业务数据 + Web 登录账号（全量导入时使用） */
+  async clearAppDataIncludingWebUsers(activeDb = 'kv') {
+    await this.clearAppDataPreserveWebUsers(activeDb)
+    for (const prefix of ['webuser:', 'webuser_id:', 'auth:session_epoch:', 'auth:bootstrap:', 'auth:rl:', 'sess_user:']) {
+      const keys = await kvListAll(this.kv, prefix)
+      await Promise.all(keys.map(k => this.kv.delete(k.name).catch(() => {})))
+    }
+    // 兼容旧 bootstrap marker
+    await this.kv.delete('auth:has_default_admin').catch(() => {})
+    await this.kv.delete('auth:bootstrap:v2').catch(() => {})
+    await this.setSetting('ACTIVE_DB', activeDb)
+    this.cache.clear()
+    _listCache.clear()
+  }
 }

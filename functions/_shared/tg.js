@@ -43,6 +43,56 @@ export class TG {
     });
   }
 
+  sendDocument({ chatId, fileId, url, caption, threadId, kb, parseMode = 'HTML' }) {
+    return this.call('sendDocument', {
+      chat_id: chatId, document: fileId || url, caption,
+      message_thread_id: threadId, parse_mode: parseMode,
+      reply_markup: kb ? { inline_keyboard: kb } : undefined,
+    });
+  }
+
+  /**
+   * 以 multipart 上传本地文件（Workers/Node 均支持 FormData + Blob）。
+   * kind: 'photo' | 'document' | 'video' | 'audio' | 'animation' | 'voice'
+   */
+  async sendMediaUpload({ kind = 'document', chatId, blob, filename, caption, threadId, kb, parseMode = 'HTML' }) {
+    try {
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      if (threadId != null && threadId !== '') form.append('message_thread_id', String(threadId));
+      if (caption) {
+        form.append('caption', String(caption));
+        if (parseMode) form.append('parse_mode', parseMode);
+      }
+      if (kb) form.append('reply_markup', JSON.stringify({ inline_keyboard: kb }));
+
+      const field = kind === 'photo' ? 'photo'
+        : kind === 'video' ? 'video'
+        : kind === 'audio' ? 'audio'
+        : kind === 'animation' ? 'animation'
+        : kind === 'voice' ? 'voice'
+        : 'document';
+      const method = kind === 'photo' ? 'sendPhoto'
+        : kind === 'video' ? 'sendVideo'
+        : kind === 'audio' ? 'sendAudio'
+        : kind === 'animation' ? 'sendAnimation'
+        : kind === 'voice' ? 'sendVoice'
+        : 'sendDocument';
+
+      const name = filename || (kind === 'photo' ? 'photo.jpg' : 'file.bin');
+      form.append(field, blob, name);
+
+      const r = await fetch(`${this.base}/${method}`, { method: 'POST', body: form });
+      if (!r.ok) {
+        const text = await r.text().catch(() => '');
+        return { ok: false, error_code: r.status, description: text };
+      }
+      return r.json();
+    } catch (e) {
+      return { ok: false, error_code: 0, description: e?.message || 'network error' };
+    }
+  }
+
   /** Forward preserving "Forwarded from" header. */
   forwardMsg({ chatId, fromChatId, msgId, threadId }) {
     return this.call('forwardMessage', {
@@ -209,3 +259,38 @@ export const msgType = m => {
   if (m.dice)           return 'dice';
   return 'other';
 };
+
+/** 从 Telegram message 提取最大质量 file_id（用于网页预览） */
+export function extractFileId(m) {
+  if (!m || typeof m !== 'object') return null
+  if (Array.isArray(m.photo) && m.photo.length) {
+    return m.photo[m.photo.length - 1]?.file_id || null
+  }
+  if (m.sticker?.file_id) return m.sticker.file_id
+  if (m.animation?.file_id) return m.animation.file_id
+  if (m.document?.file_id) return m.document.file_id
+  if (m.video?.file_id) return m.video.file_id
+  if (m.video_note?.file_id) return m.video_note.file_id
+  if (m.voice?.file_id) return m.voice.file_id
+  if (m.audio?.file_id) return m.audio.file_id
+  return null
+}
+
+/**
+ * 媒体消息 content 打包：file_id + 可选 caption
+ * 格式：file_id 或 file_id\\ncaption
+ */
+export function packMediaContent(fileId, caption = '') {
+  const id = String(fileId || '').trim()
+  const cap = String(caption || '')
+  if (!id) return cap
+  return cap ? `${id}\n${cap}` : id
+}
+
+export function unpackMediaContent(content) {
+  const s = String(content || '')
+  if (!s) return { fileId: '', caption: '' }
+  const i = s.indexOf('\n')
+  if (i < 0) return { fileId: s, caption: '' }
+  return { fileId: s.slice(0, i), caption: s.slice(i + 1) }
+}

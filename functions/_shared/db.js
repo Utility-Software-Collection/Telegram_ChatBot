@@ -117,6 +117,33 @@ export class DB {
     this._activeStore = null
   }
 
+  /** 全量导入：清空业务数据 + Web 登录账号 */
+  async clearAppDataIncludingWebUsers() {
+    const active = await this.getActiveDb()
+
+    if (typeof this._kv.clearAppDataIncludingWebUsers === 'function') {
+      await this._kv.clearAppDataIncludingWebUsers(active)
+    } else {
+      await this._kv.clearAppDataPreserveWebUsers(active)
+    }
+    if (this._d1) {
+      if (typeof this._d1.clearAppDataIncludingWebUsers === 'function') {
+        await this._d1.clearAppDataIncludingWebUsers(active)
+      } else {
+        await this._d1.clearAppDataPreserveWebUsers(active)
+      }
+    }
+    if (this._hyperdrive) {
+      if (typeof this._hyperdrive.clearAppDataIncludingWebUsers === 'function') {
+        await this._hyperdrive.clearAppDataIncludingWebUsers(active)
+      } else {
+        await this._hyperdrive.clearAppDataPreserveWebUsers(active)
+      }
+    }
+
+    this._activeStore = null
+  }
+
   /** Switch active DB and optionally sync data. */
   async switchDb(target) {
     await switchDbStore({ kv: this.kv, kvStore: this._kv, d1Store: this._d1, hyperdriveStore: this._hyperdrive }, target)

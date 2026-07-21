@@ -14,6 +14,8 @@ const BUSINESS_TABLES = {
   whitelist: ['user_id', 'reason', 'added_by', 'created_at'],
   messages: ['id', 'user_id', 'direction', 'content', 'message_type', 'telegram_message_id', 'created_at'],
   recent_convs: ['user_id', 'last_message', 'last_direction', 'last_at'],
+  // Web 后台登录账号（含 password_hash / TOTP）
+  web_users: ['id', 'username', 'password_hash', 'totp_secret', 'totp_enabled', 'is_admin', 'created_at'],
 }
 
 function sqlValue(value) {
@@ -48,6 +50,7 @@ function buildDeleteStatements() {
     'DELETE FROM whitelist;',
     'DELETE FROM users;',
     'DELETE FROM settings;',
+    'DELETE FROM web_users;',
   ]
 }
 
@@ -212,7 +215,7 @@ async function decodeSqlByMode(input, password = '') {
     return String(input || '')
   }
 
-  throw new Error('Unsupported SQL format: use encrypted .db export, or legacy .sql with TGCB_RECORD markers')
+  throw new Error('Unsupported SQL format: use encrypted .db export, or a valid legacy SQL backup')
 }
 
 function buildPlainSqlFromRecords(records, activeDb) {
@@ -246,29 +249,33 @@ const DEFAULT_SECRET_SETTING_KEYS = [
 ]
 
 /**
- * 导出业务数据为加密二进制包（Uint8Array）。
- * 打开文件即为乱码，无法直接阅读。
- * options.password 必填；includeSecrets 控制是否包含 BOT_TOKEN 等密钥。
+ * 导出全量数据为加密二进制包（Uint8Array）。
+ * 打开文件即为乱码。password 必填。
+ * 默认包含：业务数据 + BOT_TOKEN 等密钥 + Web 登录账号（含密码哈希）。
+ * options.includeSecrets / includeWebUsers 默认 true，仅显式 false 时排除。
  */
 export async function exportBusinessDataSql(store, activeDb = 'kv', options = {}) {
   const password = String(options?.password || '')
   if (!password) throw new Error('AES password is required')
 
-  const includeSecrets = options?.includeSecrets === true
+  const includeSecrets = options?.includeSecrets !== false
+  const includeWebUsers = options?.includeWebUsers !== false
   const secretKeys = Array.isArray(options?.secretKeys) && options.secretKeys.length
     ? options.secretKeys
     : DEFAULT_SECRET_SETTING_KEYS
   const secretKeySet = new Set(secretKeys.map((k) => String(k)))
 
-  const [settings, users, whitelist, messages, recentConvs] = await Promise.all([
+  const [settings, users, whitelist, messages, recentConvs, webUsers] = await Promise.all([
     store.getAllSettings(),
     store.getAllUsersRaw(),
     store.getWhitelistRaw(),
     store.getAllMsgsRaw(),
     store.getAllRecentRaw(),
+    includeWebUsers && typeof store.getAllWebUsersRaw === 'function'
+      ? store.getAllWebUsersRaw()
+      : Promise.resolve([]),
   ])
 
-  // 默认剥离密钥字段；仅 includeSecrets 时保留完整值
   const settingsEntries = Object.entries(settings || {})
     .filter(([key]) => includeSecrets || !secretKeySet.has(String(key)))
     .map(([key, value]) => normalizeRecord('settings', { key, value }))
@@ -279,10 +286,12 @@ export async function exportBusinessDataSql(store, activeDb = 'kv', options = {}
     whitelist: (whitelist || []).map((item) => normalizeRecord('whitelist', item)),
     messages: (messages || []).map((item) => normalizeRecord('messages', item)),
     recent_convs: (recentConvs || []).map((item) => normalizeRecord('recent_convs', item)),
+    web_users: includeWebUsers
+      ? (webUsers || []).map((item) => normalizeRecord('web_users', item))
+      : [],
   }
 
   const plainSql = buildPlainSqlFromRecords(records, activeDb)
-  // 始终返回二进制 AES 包
   return encryptSqlPayloadBinary(plainSql, password)
 }
 
@@ -297,6 +306,7 @@ export async function parseBusinessSql(sqlInput, options = {}) {
     whitelist: [],
     messages: [],
     recent_convs: [],
+    web_users: [],
   }
 
   for (const line of String(decodedSql || '').split(/\r?\n/)) {
@@ -341,6 +351,22 @@ async function restoreToKv(kvStore, records) {
 
   for (const item of records.recent_convs) {
     await kvStore.kv.put(`recent:${item.user_id}`, JSON.stringify(item))
+  }
+
+  // Web 后台账号（若备份中包含）
+  for (const item of records.web_users || []) {
+    if (!item?.id || !item?.username) continue
+    const user = {
+      id: item.id,
+      username: item.username,
+      password_hash: item.password_hash || '',
+      totp_secret: item.totp_secret ?? null,
+      totp_enabled: item.totp_enabled ? 1 : 0,
+      is_admin: item.is_admin ? 1 : 0,
+      created_at: item.created_at || new Date().toISOString(),
+    }
+    await kvStore.kv.put(`webuser:${String(user.username).toLowerCase()}`, JSON.stringify(user))
+    await kvStore.kv.put(`webuser_id:${user.id}`, JSON.stringify(user))
   }
 }
 
@@ -407,6 +433,21 @@ async function restoreToD1(d1Store, records) {
       item.last_at,
     )
   }
+
+  for (const item of records.web_users || []) {
+    if (!item?.id || !item?.username) continue
+    await d1Store.exec(
+      `INSERT OR REPLACE INTO web_users(id,username,password_hash,totp_secret,totp_enabled,is_admin,created_at)
+       VALUES(?,?,?,?,?,?,?)`,
+      item.id,
+      item.username,
+      item.password_hash || '',
+      item.totp_secret ?? null,
+      item.totp_enabled ? 1 : 0,
+      item.is_admin ? 1 : 0,
+      item.created_at || new Date().toISOString(),
+    )
+  }
 }
 
 async function restoreToPostgres(hyperdriveStore, records) {
@@ -471,16 +512,39 @@ async function restoreToPostgres(hyperdriveStore, records) {
       item.user_id, item.last_message, item.last_direction, item.last_at,
     )
   }
+
+  for (const item of records.web_users || []) {
+    if (!item?.id || !item?.username) continue
+    await hyperdriveStore.exec(
+      `INSERT INTO web_users(id,username,password_hash,totp_secret,totp_enabled,is_admin,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT(id) DO UPDATE SET
+         username=EXCLUDED.username,
+         password_hash=EXCLUDED.password_hash,
+         totp_secret=EXCLUDED.totp_secret,
+         totp_enabled=EXCLUDED.totp_enabled,
+         is_admin=EXCLUDED.is_admin,
+         created_at=EXCLUDED.created_at`,
+      item.id,
+      item.username,
+      item.password_hash || '',
+      item.totp_secret ?? null,
+      item.totp_enabled ? 1 : 0,
+      item.is_admin ? 1 : 0,
+      item.created_at || new Date().toISOString(),
+    )
+  }
 }
 
 /** 从当前 store 快照业务数据（用于导入失败回滚） */
 export async function snapshotBusinessRecords(store) {
-  const [settings, users, whitelist, messages, recentConvs] = await Promise.all([
+  const [settings, users, whitelist, messages, recentConvs, webUsers] = await Promise.all([
     store.getAllSettings(),
     store.getAllUsersRaw(),
     store.getWhitelistRaw(),
     store.getAllMsgsRaw(),
     store.getAllRecentRaw(),
+    typeof store.getAllWebUsersRaw === 'function' ? store.getAllWebUsersRaw() : Promise.resolve([]),
   ])
   return {
     settings: Object.entries(settings || {}).map(([key, value]) => normalizeRecord('settings', { key, value })),
@@ -488,6 +552,7 @@ export async function snapshotBusinessRecords(store) {
     whitelist: (whitelist || []).map((item) => normalizeRecord('whitelist', item)),
     messages: (messages || []).map((item) => normalizeRecord('messages', item)),
     recent_convs: (recentConvs || []).map((item) => normalizeRecord('recent_convs', item)),
+    web_users: (webUsers || []).map((item) => normalizeRecord('web_users', item)),
   }
 }
 

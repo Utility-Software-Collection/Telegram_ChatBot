@@ -97,14 +97,21 @@
                         {{ formatDisplayName(u) }}
                         <span v-if="wlMap[u.user_id] && !u.is_blocked" class="wl-inline-tag">{{ t('users.detail.whitelist') }}</span>
                       </div>
-                      <div class="u-username">{{ u.username ? '@' + u.username : t('users.detail.noUsername') }}</div>
+                      <div class="u-username">
+                        <button
+                          v-if="u.username"
+                          type="button"
+                          class="id-copy"
+                          :title="t('common.copy')"
+                          @click.stop="copyText('@' + u.username, t('users.copyUsername'))"
+                        >@{{ u.username }}</button>
+                        <template v-else>{{ t('users.detail.noUsername') }}</template>
+                      </div>
                     </div>
                   </div>
                 </td>
                 <td>
-                  <button type="button" class="id-copy" :title="t('common.copy')" @click.stop="copyText(String(u.user_id), t('users.copyUid'))">
-                    <code class="user-id">{{ u.user_id }}</code>
-                  </button>
+                  <button type="button" class="id-copy" :title="t('common.copy')" @click.stop="copyText(String(u.user_id), t('users.copyUid'))">{{ u.user_id }}</button>
                 </td>
                 <td>
                   <span class="badge" :class="u.is_blocked ? 'badge-danger' : 'badge-success'">
@@ -170,7 +177,16 @@
           </div>
           <div style="flex:1;min-width:0">
             <div style="font-size:17px;font-weight:700">{{ detailUser.first_name }} {{ detailUser.last_name }}</div>
-            <div class="text-muted text-sm">{{ detailUser.username ? '@' + detailUser.username : t('users.detail.noUsername') }}</div>
+            <div class="text-muted text-sm">
+              <button
+                v-if="detailUser.username"
+                type="button"
+                class="id-copy"
+                :title="t('common.copy')"
+                @click="copyText('@' + detailUser.username, t('users.copyUsername'))"
+              >@{{ detailUser.username }}</button>
+              <template v-else>{{ t('users.detail.noUsername') }}</template>
+            </div>
           </div>
           <button class="btn-icon" @click="detailUser = null" style="font-size:20px">
             <AppIcon name="close" :size="18" />
@@ -180,9 +196,9 @@
         <div class="detail-grid">
           <div class="dr">
             <span class="dl">{{ t('users.detail.id') }}</span>
-            <button type="button" class="id-copy" :title="t('common.copy')" @click="copyText(String(detailUser.user_id), t('users.copyUid'))">
-              <code>{{ detailUser.user_id }}</code>
-            </button>
+            <span class="id-inline">
+              <button type="button" class="id-copy" :title="t('common.copy')" @click="copyText(String(detailUser.user_id), t('users.copyUid'))">{{ detailUser.user_id }}</button>
+            </span>
             <button class="btn-ghost btn-sm copy-btn" @click="copyText(String(detailUser.user_id), t('users.copyUid'))">{{ t('users.copy') }}</button>
           </div>
           <div class="dr"><span class="dl">{{ t('users.detail.status') }}</span>
@@ -742,34 +758,13 @@ onMounted(() => {
 }
 .ava-img{width:100%;height:100%;object-fit:cover}
 .user-id{
-  font-size:12px;
-  display:inline-block;
-  background:transparent!important;
-  border-radius:0;
-  padding:0;
-  max-width:none;
-  overflow:visible;
-  letter-spacing:.02em;
-  font-variant-numeric:tabular-nums;
+  font:inherit;font-size:inherit;line-height:inherit;
+  display:inline;background:transparent!important;border-radius:0;padding:0;
+  font-variant-numeric:tabular-nums;color:inherit;
 }
-.id-copy{
-  appearance:none;border:1px solid var(--border);background:var(--bg3);padding:5px 10px;margin:0;cursor:pointer;
-  color:var(--text2);font:inherit;display:inline-flex;align-items:center;justify-content:center;
-  min-width:118px;border-radius:8px;transition:var(--tr);line-height:1.2;
-}
-.id-copy:hover{
-  color:var(--accent);border-color:rgba(79,142,247,.35);background:var(--accent-dim);
-}
+/* id-copy 使用全局文字样式，仅保留 hover 强调 */
+.id-copy:hover,
 .id-copy:hover code{color:var(--accent)}
-.id-copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-:global(:root.glass) .id-copy{
-  background:rgba(255,255,255,.06);
-  border-color:rgba(255,255,255,.12);
-}
-:global(:root.light.glass) .id-copy{
-  background:rgba(15,23,42,.04);
-  border-color:rgba(148,163,184,.28);
-}
 .cb{
   width:14px;
   height:14px;
@@ -822,9 +817,9 @@ onMounted(() => {
 .modal-hdr{display:flex;align-items:center;gap:14px;margin-bottom:20px}
 .modal-ava{width:56px;height:56px;border-radius:50%;background:var(--accent-dim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:22px;overflow:hidden;flex-shrink:0}
 .detail-grid{display:flex;flex-direction:column;gap:10px;margin-bottom:20px}
-.dr{display:flex;align-items:center;gap:10px;font-size:13px}
-.dl{width:80px;flex-shrink:0;color:var(--text2);font-size:12px}
+.dr{display:flex;align-items:center;gap:10px;font-size:13px;min-height:28px}
+.dl{width:80px;flex-shrink:0;color:var(--text2);font-size:12px;line-height:1.4;display:inline-flex;align-items:center}
 .modal-acts{display:flex;gap:8px;flex-wrap:wrap}
 .modal-acts button,.modal-acts a{display:inline-flex;align-items:center;flex:1;min-width:70px;justify-content:center;font-size:12px;padding:7px 10px;border-radius:var(--rs);gap:6px}
-.copy-btn{padding:2px 8px;font-size:11px}
+.copy-btn{padding:2px 8px;font-size:11px;height:1.5em;display:inline-flex;align-items:center}
 </style>

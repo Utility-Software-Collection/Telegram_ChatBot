@@ -49,11 +49,20 @@ const SENSITIVE_CACHE_KEYS = new Set([
   'HCAPTCHA_SECRET_KEY',
 ])
 
+/**
+ * 剥离设置中的真实密钥，但保留「是否已配置」标记。
+ * 旧实现直接 delete 字段，会导致仪表盘从缓存读到 BOT_TOKEN 缺失，
+ * 误显示「✗ 未配置」（有缓存时偶现）。
+ */
 export function stripSensitiveSettings(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
   const next = { ...value }
   for (const key of SENSITIVE_CACHE_KEYS) {
-    if (key in next) delete next[key]
+    if (!(key in next)) continue
+    const raw = next[key]
+    const configured = raw != null && String(raw).trim() !== ''
+    // 已配置 → 固定占位符；未配置 → 空串（与 maskSecretValue 语义一致）
+    next[key] = configured ? '****' : ''
   }
   return next
 }

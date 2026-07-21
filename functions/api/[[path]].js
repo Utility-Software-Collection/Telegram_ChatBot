@@ -736,17 +736,23 @@ export async function onRequest({ request, env, waitUntil }) {
       const active = await db.getActiveDb();
       const body = await request.json().catch(() => ({}));
       // 仅支持 AES 二进制包（打开即乱码）；password 必填
+      // 默认打包全部数据：密钥 + Web 登录账号
       const password = String(body?.password || '');
-      const includeSecrets = body?.includeSecrets === true || body?.includeSecrets === 1 || body?.includeSecrets === '1';
       if (!password) return err(t('common.missingParams'), 400);
+      const includeSecrets = body?.includeSecrets === false || body?.includeSecrets === 0 || body?.includeSecrets === '0'
+        ? false
+        : true;
+      const includeWebUsers = body?.includeWebUsers === false || body?.includeWebUsers === 0 || body?.includeWebUsers === '0'
+        ? false
+        : true;
 
       const binary = await exportBusinessDataSql(db, active, {
         password,
         includeSecrets,
+        includeWebUsers,
         secretKeys: SECRET_SETTING_KEYS,
       });
-      const secretsSuffix = includeSecrets ? '_SECRETS' : '';
-      const fileName = `${String(active || 'kv').toUpperCase()}_AES${secretsSuffix}.db`;
+      const fileName = `${String(active || 'kv').toUpperCase()}_AES.db`;
       return new Response(binary, {
         status: 200,
         headers: {
@@ -756,6 +762,7 @@ export async function onRequest({ request, env, waitUntil }) {
           'Cache-Control': 'no-store',
           'X-Active-Db': active,
           'X-Export-Secrets': includeSecrets ? '1' : '0',
+          'X-Export-WebUsers': includeWebUsers ? '1' : '0',
           'X-Export-Format': 'tgcb-bin-aes',
         },
       });
@@ -768,7 +775,7 @@ export async function onRequest({ request, env, waitUntil }) {
   if (path === '/settings/sql/import' && request.method === 'POST') {
     try {
       const body = await request.json().catch(() => ({}));
-      // 支持：AES 二进制 .db（base64）/ 旧版文本 AES·Base64 / 旧版明文 .sql（含 TGCB_RECORD）
+      // 支持：AES 二进制 .db（base64）/ 旧版文本 AES·Base64 / 旧版明文 .sql
       const password = String(body?.password || '');
       const sqlPayload = body?.sql ?? body?.data ?? '';
       if (!sqlPayload || !String(sqlPayload).trim()) return err(t('common.missingParams'), 400);
@@ -784,7 +791,10 @@ export async function onRequest({ request, env, waitUntil }) {
       const importPassword = password;
       const snapshotStore = await db._store();
 
-      // 解析校验 + 清空 + 写入；失败自动从快照回滚
+      // 若备份含 web_users，导入时一并替换 Web 账号；否则保留现有 Web 账号
+      const parsedPreview = await parseBusinessSql(sqlPayload, { password: importPassword });
+      const hasWebUsers = Array.isArray(parsedPreview.web_users) && parsedPreview.web_users.length > 0;
+
       await importBusinessDataSql({
         sqlText: sqlPayload,
         target: active,
@@ -792,7 +802,9 @@ export async function onRequest({ request, env, waitUntil }) {
         d1Store: db._d1,
         hyperdriveStore: db._hyperdrive,
         password: importPassword,
-        clearFn: () => db.clearAppDataPreserveWebUsers(),
+        clearFn: () => hasWebUsers
+          ? db.clearAppDataIncludingWebUsers()
+          : db.clearAppDataPreserveWebUsers(),
         snapshotStore,
       });
 
@@ -804,7 +816,7 @@ export async function onRequest({ request, env, waitUntil }) {
         await db.syncData(active, 'hyperdrive');
       }
 
-      return j({ ok: true, active });
+      return j({ ok: true, active, restoredWebUsers: hasWebUsers });
     } catch (e) {
       console.error('[API Error] settings.sqlImportFailed:', e.message);
       return err(t('settings.sqlImportFailed'), 500);
@@ -852,6 +864,40 @@ export async function onRequest({ request, env, waitUntil }) {
       if (!fRes.ok) return new Response('', { status: 404 });
       const img = await tg.fetchFile(fRes.result.file_path);
       return new Response(img.body, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=3600', ...CORS } });
+    } catch {
+      return new Response('', { status: 404 });
+    }
+  }
+
+  // 消息媒体代理（photo / sticker / animation 等，按 file_id 拉取）
+  if (path === '/tg/file' && request.method === 'GET') {
+    try {
+      const fileId = String(url.searchParams.get('file_id') || url.searchParams.get('id') || '').trim();
+      if (!fileId) return new Response('', { status: 400 });
+      const botToken = await db.getSetting('BOT_TOKEN');
+      if (!botToken) return new Response('', { status: 404 });
+      const tg = new TG(botToken);
+      const fRes = await tg.getFile({ fileId });
+      if (!fRes?.ok || !fRes.result?.file_path) return new Response('', { status: 404 });
+      const filePath = fRes.result.file_path;
+      const img = await tg.fetchFile(filePath);
+      if (!img?.ok) return new Response('', { status: 404 });
+      const lower = String(filePath).toLowerCase();
+      const ctype = lower.endsWith('.webp') ? 'image/webp'
+        : lower.endsWith('.png') ? 'image/png'
+        : lower.endsWith('.gif') ? 'image/gif'
+        : lower.endsWith('.tgs') ? 'application/x-tgsticker'
+        : lower.endsWith('.webm') ? 'video/webm'
+        : lower.endsWith('.mp4') ? 'video/mp4'
+        : lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'image/jpeg'
+        : (img.headers?.get?.('content-type') || 'application/octet-stream');
+      return new Response(img.body, {
+        headers: {
+          'Content-Type': ctype,
+          'Cache-Control': 'private, max-age=3600',
+          ...CORS,
+        },
+      });
     } catch {
       return new Response('', { status: 404 });
     }
@@ -1008,6 +1054,140 @@ export async function onRequest({ request, env, waitUntil }) {
     } catch (e) {
       console.error('[API Error] conversations.deleteFailed:', e.message);
       return err(t('conversations.deleteFailed'), 500);
+    }
+  }
+
+  // 网页端向用户发送消息（文本 / 图片 / 文件）
+  if (convMatch && request.method === 'POST') {
+    try {
+      const uid = parseInt(convMatch[1], 10);
+      if (!Number.isFinite(uid) || uid <= 0) return err(t('common.missingParams'));
+
+      const contentType = String(request.headers.get('content-type') || '').toLowerCase();
+      let kind = 'text';
+      let text = '';
+      let caption = '';
+      let fileName = '';
+      let mimeType = '';
+      let fileBytes = null;
+
+      if (contentType.includes('multipart/form-data')) {
+        const form = await request.formData();
+        kind = String(form.get('kind') || form.get('type') || 'document').toLowerCase();
+        text = String(form.get('text') || form.get('message') || '').trim();
+        caption = String(form.get('caption') || text || '').trim();
+        const file = form.get('file');
+        if (file && typeof file.arrayBuffer === 'function') {
+          fileName = String(file.name || form.get('filename') || 'file.bin');
+          mimeType = String(file.type || form.get('mime') || 'application/octet-stream');
+          fileBytes = new Uint8Array(await file.arrayBuffer());
+          if (!kind || kind === 'file') {
+            kind = mimeType.startsWith('image/') ? 'photo' : 'document';
+          }
+        } else if (text) {
+          kind = 'text';
+        } else {
+          return err(t('common.missingParams'));
+        }
+      } else {
+        const body = await request.json().catch(() => ({}));
+        kind = String(body?.kind || body?.type || 'text').toLowerCase();
+        text = String(body?.text || body?.message || '').trim();
+        caption = String(body?.caption || text || '').trim();
+        if (kind !== 'text') {
+          // JSON 内嵌 base64 文件
+          const b64 = String(body?.fileBase64 || body?.data || '').replace(/^data:[^;]+;base64,/, '');
+          if (!b64) return err(t('common.missingParams'));
+          fileName = String(body?.filename || body?.fileName || 'file.bin');
+          mimeType = String(body?.mime || body?.mimeType || 'application/octet-stream');
+          const bin = atob(b64);
+          fileBytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) fileBytes[i] = bin.charCodeAt(i);
+          if (kind === 'file') kind = mimeType.startsWith('image/') ? 'photo' : 'document';
+        } else if (!text) {
+          return err(t('common.missingParams'));
+        }
+      }
+
+      if (fileBytes && fileBytes.byteLength > 20 * 1024 * 1024) {
+        return err(t('conversations.fileTooLarge') || '文件过大（上限 20MB）', 400);
+      }
+
+      const settings = await db.getAllSettings();
+      const botToken = settings.BOT_TOKEN;
+      if (!botToken) return err(t('settings.botTokenRequired') || t('common.missingParams'), 400);
+      const tg = new TG(botToken);
+
+      let sendResult = null;
+      let messageType = 'text';
+      let storedContent = text;
+
+      if (kind === 'text') {
+        sendResult = await tg.sendMsg({ chatId: uid, text });
+        messageType = 'text';
+        storedContent = text;
+      } else {
+        const blob = new Blob([fileBytes], { type: mimeType || 'application/octet-stream' });
+        const mediaKind = kind === 'photo' ? 'photo' : 'document';
+        sendResult = await tg.sendMediaUpload({
+          kind: mediaKind,
+          chatId: uid,
+          blob,
+          filename: fileName || (mediaKind === 'photo' ? 'photo.jpg' : 'file.bin'),
+          caption: caption || undefined,
+        });
+        messageType = mediaKind;
+        storedContent = caption || fileName || (mediaKind === 'photo' ? '[photo]' : '[document]');
+      }
+
+      if (!sendResult?.ok) {
+        console.error('[API] send to user failed:', sendResult?.description || sendResult);
+        return err(t('conversations.sendFailed') || '发送失败', 502);
+      }
+
+      const tgMsgId = sendResult?.result?.message_id;
+      let fileIdStored = '';
+      if (kind !== 'text' && sendResult?.result) {
+        const r = sendResult.result;
+        if (Array.isArray(r.photo) && r.photo.length) {
+          fileIdStored = r.photo[r.photo.length - 1]?.file_id || '';
+        } else if (r.document?.file_id) {
+          fileIdStored = r.document.file_id;
+        } else if (r.sticker?.file_id) {
+          fileIdStored = r.sticker.file_id;
+        } else if (r.animation?.file_id) {
+          fileIdStored = r.animation.file_id;
+        } else if (r.video?.file_id) {
+          fileIdStored = r.video.file_id;
+        }
+      }
+      if (fileIdStored) {
+        storedContent = caption ? `${fileIdStored}\n${caption}` : fileIdStored;
+      }
+
+      await db.addMsg({
+        userId: uid,
+        direction: 'outgoing',
+        content: storedContent,
+        messageType,
+        telegramMessageId: tgMsgId,
+      });
+
+      return j({
+        ok: true,
+        message: {
+          id: `${Date.now()}_web`,
+          user_id: uid,
+          direction: 'outgoing',
+          content: storedContent,
+          message_type: messageType,
+          telegram_message_id: tgMsgId,
+          created_at: new Date().toISOString(),
+        },
+      });
+    } catch (e) {
+      console.error('[API Error] conversations.sendFailed:', e?.message || e);
+      return err(t('conversations.sendFailed') || '发送失败', 500);
     }
   }
 

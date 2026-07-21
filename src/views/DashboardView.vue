@@ -53,7 +53,16 @@
           </div>
           <div>
             <div style="font-weight:600">{{ bot.first_name }}</div>
-            <div class="text-muted text-sm">@{{ bot.username }} · ID: {{ bot.id }}</div>
+            <div class="text-muted text-sm">
+              <template v-if="bot.username">
+                <button type="button" class="id-copy" :title="t('common.copy')" @click="copyUsername(bot.username)">@{{ bot.username }}</button>
+                <span> · </span>
+              </template>
+              <span class="id-inline">
+                <span class="id-label">ID: </span>
+                <button type="button" class="id-copy" :title="t('common.copy')" @click="copyTelegramId(bot.id)">{{ bot.id }}</button>
+              </span>
+            </div>
           </div>
           <span class="badge badge-success">{{ t('dashboard.botOnline') }}</span>
         </div>
@@ -107,11 +116,13 @@ import { RouterLink, useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import api from '../stores/api.js'
 import { useI18nStore } from '../stores/i18n'
+import { useToast } from '../stores/toast.js'
 import { getLatestTimestamp, mergeByKey, readLocalCache, writeLocalCache } from '../stores/local-cache.js'
 
 const router = useRouter()
 const i18n = useI18nStore()
 const t = i18n.t
+const toast = useToast()
 
 const stats = ref({}), convs = ref([]), settings = ref({}), bot = ref(null)
 const loading = ref(true), avatars = ref({})
@@ -128,11 +139,16 @@ const statCards = computed(() => [
   { icon: 'today', label: t('dashboard.todayMessages'), val: stats.value.todayMessages ?? '—', cls: 'text-success', to: '/conversations' },
 ])
 
+/** 脱敏值（**** / ****xxxx）或非空明文均视为已配置 */
+function isConfigured(value) {
+  return String(value ?? '').trim() !== ''
+}
+
 const configChecks = computed(() => [
-  // GET /settings 对 BOT_TOKEN 脱敏为 ****xxxx，非空即视为已配置
-  { label: t('dashboard.config.botToken'), ok: !!String(settings.value.BOT_TOKEN || '').trim() },
-  { label: t('dashboard.config.topicGroupId'), ok: !!settings.value.FORUM_GROUP_ID },
-  { label: t('dashboard.config.adminIds'), ok: !!settings.value.ADMIN_IDS },
+  // GET /settings 对 BOT_TOKEN 脱敏为 ****xxxx；本地缓存仅保留 **** 占位
+  { label: t('dashboard.config.botToken'), ok: isConfigured(settings.value.BOT_TOKEN) },
+  { label: t('dashboard.config.topicGroupId'), ok: isConfigured(settings.value.FORUM_GROUP_ID) },
+  { label: t('dashboard.config.adminIds'), ok: isConfigured(settings.value.ADMIN_IDS) },
 ])
 
 function tryLoadAvatar(uid) {
@@ -146,7 +162,11 @@ async function load(force = false) {
   loading.value = true
 
   const cachedStats = readLocalCache(DASHBOARD_STATS_CACHE_KEY, { ttlMs: 60 * 1000 })
-  const cachedSettings = readLocalCache(DASHBOARD_SETTINGS_CACHE_KEY, { ttlMs: 5 * 60 * 1000 })
+  let cachedSettings = readLocalCache(DASHBOARD_SETTINGS_CACHE_KEY, { ttlMs: 5 * 60 * 1000 })
+  // 旧缓存曾直接删除 BOT_TOKEN 字段，命中后会误判「未配置」——强制回源
+  if (cachedSettings && typeof cachedSettings === 'object' && !('BOT_TOKEN' in cachedSettings)) {
+    cachedSettings = null
+  }
   const cachedBot = readLocalCache(DASHBOARD_BOT_CACHE_KEY, { ttlMs: 5 * 60 * 1000 })
   const cachedConvs = readLocalCache(DASHBOARD_CONVS_CACHE_KEY)
 
@@ -188,6 +208,45 @@ async function load(force = false) {
 
 function goTo(path) {
   if (path) router.push(path)
+}
+
+async function copyTelegramId(id) {
+  const val = String(id ?? '').trim()
+  if (!val) return
+  try {
+    if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(val)
+    else {
+      const ta = document.createElement('textarea')
+      ta.value = val
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success(t('users.flash.copySuccess', { label: 'ID' }))
+  } catch (e) {
+    toast.error(t('users.flash.copyFailed', { err: e?.message || e }))
+  }
+}
+
+async function copyUsername(username) {
+  const raw = String(username || '').replace(/^@/, '').trim()
+  if (!raw) return
+  const val = `@${raw}`
+  try {
+    if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(val)
+    else {
+      const ta = document.createElement('textarea')
+      ta.value = val
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success(t('users.flash.copySuccess', { label: t('users.copyUsername') }))
+  } catch (e) {
+    toast.error(t('users.flash.copyFailed', { err: e?.message || e }))
+  }
 }
 
 function fmtTime(ts) {

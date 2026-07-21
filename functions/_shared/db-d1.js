@@ -267,6 +267,12 @@ export class D1Store {
     await this.setSetting('ACTIVE_DB', activeDb)
   }
 
+  async clearAppDataIncludingWebUsers(activeDb = 'kv') {
+    await this.clearAppDataPreserveWebUsers(activeDb)
+    await this.exec('DELETE FROM web_users')
+    await this.setSetting('ACTIVE_DB', activeDb)
+  }
+
   async initSchema() {
     for (const stmt of D1_SCHEMA.split(';').map(s => s.trim()).filter(Boolean)) {
       await this.exec(stmt)

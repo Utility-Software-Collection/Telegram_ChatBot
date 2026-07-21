@@ -1,4 +1,4 @@
-import { TG, esc, name, msgType } from './tg.js';
+import { TG, esc, name, msgType, extractFileId, packMediaContent } from './tg.js';
 import { generateCode, generateWrongOptions } from './captcha.js';
 import { createBotT, getBotCommands, normalizeBotLocale } from './bot-i18n.js';
 import {
@@ -804,7 +804,12 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
     const recordTask = db.addMsg({
       userId: target.user_id,
       direction: 'outgoing',
-      content: msg.text || msg.caption || t('content.media'),
+      content: (() => {
+        const type = msgType(msg)
+        const fileId = extractFileId(msg)
+        if (fileId && type !== 'text') return packMediaContent(fileId, msg.caption || '')
+        return msg.text || msg.caption || t('content.media')
+      })(),
       messageType: msgType(msg),
       telegramMessageId: msg.message_id,
     }).catch((e) => console.error('record admin topic msg failed:', e));
@@ -1067,7 +1072,12 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
     const recordTask = db.addMsg({
       userId: user.id,
       direction: 'incoming',
-      content: msg.text || msg.caption || t('content.media'),
+      content: (() => {
+        const type = msgType(msg)
+        const fileId = extractFileId(msg)
+        if (fileId && type !== 'text') return packMediaContent(fileId, msg.caption || '')
+        return msg.text || msg.caption || t('content.media')
+      })(),
       messageType: msgType(msg),
       telegramMessageId: msg.message_id,
     }).catch((e) => console.error('record user msg failed:', e));
@@ -1086,7 +1096,12 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
         const recordTask = db.addMsg({
           userId: user.id,
           direction: 'incoming',
-          content: msg.text || msg.caption || t('content.media'),
+          content: (() => {
+            const type = msgType(msg)
+            const fileId = extractFileId(msg)
+            if (fileId && type !== 'text') return packMediaContent(fileId, msg.caption || '')
+            return msg.text || msg.caption || t('content.media')
+          })(),
           messageType: msgType(msg),
           telegramMessageId: msg.message_id,
         }).catch((e) => console.error('record retried user msg failed:', e));
