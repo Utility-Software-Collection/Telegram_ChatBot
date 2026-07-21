@@ -52,68 +52,36 @@
           v-model="username"
           :placeholder="t('auth.login.username')"
           autocomplete="username"
-          @keydown.enter="mode === 'password' ? handleLogin() : handleLoginTotp()"
+          @keydown.enter="handleLogin"
         />
       </div>
 
-      <template v-if="mode === 'password'">
-        <div class="form-group">
-          <label>{{ t('auth.login.password') }}</label>
-          <input
-            v-model="password"
-            type="password"
-            :placeholder="t('auth.login.password')"
-            autocomplete="current-password"
-            @keydown.enter="handleLogin"
-          />
-        </div>
+      <div class="form-group">
+        <label>{{ t('auth.login.password') }}</label>
+        <input
+          v-model="password"
+          type="password"
+          :placeholder="t('auth.login.password')"
+          autocomplete="current-password"
+          @keydown.enter="handleLogin"
+        />
+      </div>
 
-        <div v-if="needTotp" class="form-group">
-          <label>{{ t('auth.login.totp') }} <span class="text-muted">({{ t('auth.login.sixDigits') }})</span></label>
-          <input
-            v-model="totp"
-            :placeholder="t('auth.login.totp')"
-            maxlength="6"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            @keydown.enter="handleLogin"
-          />
-        </div>
+      <div v-if="needTotp" class="form-group">
+        <label>{{ t('auth.login.totp') }} <span class="text-muted">({{ t('auth.login.sixDigits') }})</span></label>
+        <input
+          v-model="totp"
+          :placeholder="t('auth.login.totp')"
+          maxlength="6"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          @keydown.enter="handleLogin"
+        />
+      </div>
 
-        <button class="btn-primary w-full" :disabled="loading" @click="handleLogin">
-          <span v-if="loading" class="spinner"></span>{{ loading ? t('auth.login.loggingIn') : t('auth.login.login') }}
-        </button>
-
-        <div v-if="totpAvailable" class="login-switch">
-          <button class="btn-ghost btn-sm" type="button" :disabled="loading" @click="switchMode('totp_only')">
-            {{ t('auth.login.switchToTotp') }}
-          </button>
-        </div>
-      </template>
-
-      <template v-else>
-        <div class="form-group">
-          <label>{{ t('auth.login.totp') }} <span class="text-muted">({{ t('auth.login.sixDigits') }})</span></label>
-          <input
-            v-model="totp"
-            :placeholder="t('auth.login.totp')"
-            maxlength="6"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            @keydown.enter="handleLoginTotp"
-          />
-        </div>
-
-        <button class="btn-primary w-full" :disabled="loading" @click="handleLoginTotp">
-          <span v-if="loading" class="spinner"></span>{{ loading ? t('auth.login.loggingIn') : t('auth.login.login') }}
-        </button>
-
-        <div class="login-switch">
-          <button class="btn-ghost btn-sm" type="button" :disabled="loading" @click="switchMode('password')">
-            {{ t('auth.login.switchToPassword') }}
-          </button>
-        </div>
-      </template>
+      <button class="btn-primary w-full" :disabled="loading" @click="handleLogin">
+        <span v-if="loading" class="spinner"></span>{{ loading ? t('auth.login.loggingIn') : t('auth.login.login') }}
+      </button>
 
       <div class="login-footer">
         {{ needsRegistration ? t('auth.login.firstRegisterTip') : t('auth.login.defaultAccountTip') }}
@@ -123,7 +91,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import { AUTH_NOTICE_SESSION_EXPIRED, consumeAuthNotice, useAuthStore } from '../stores/auth'
@@ -135,22 +103,18 @@ const i18n = useI18nStore()
 const t = i18n.t
 const router = useRouter()
 
-const mode = ref('password')
 const username = ref('')
 const password = ref('')
 const totp = ref('')
 const loading = ref(false)
 const error = ref('')
 const needsRegistration = ref(false)
-const totpAvailable = ref(false)
 const needTotp = ref(false)
 const isDark = ref(true)
 const themeMode = ref('system')
 const themeMenuOpen = ref(false)
 const glassEnabled = ref(false)
 
-let totpStatusTimer = null
-let totpStatusSeq = 0
 let systemThemeQuery = null
 
 const localeOptions = computed(() =>
@@ -175,12 +139,6 @@ const themeOptions = computed(() => [
 const currentThemeOption = computed(() => (
   themeOptions.value.find((option) => option.value === themeMode.value) || themeOptions.value[2]
 ))
-
-function switchMode(nextMode) {
-  if (nextMode === 'totp_only' && !totpAvailable.value) return
-  mode.value = nextMode
-  error.value = ''
-}
 
 function toggleThemeMenu() {
   themeMenuOpen.value = !themeMenuOpen.value
@@ -240,37 +198,6 @@ async function loadAuthStatus() {
   }
 }
 
-async function checkTotpStatus(nextUsername = username.value) {
-  const currentUsername = String(nextUsername || '').trim()
-  const currentSeq = ++totpStatusSeq
-
-  if (!currentUsername) {
-    totpAvailable.value = false
-    if (mode.value === 'totp_only') mode.value = 'password'
-    return
-  }
-
-  try {
-    const res = await fetch('/api/auth/totp-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: currentUsername }),
-    })
-    const data = await readJsonSafe(res, {})
-
-    if (currentSeq !== totpStatusSeq) return
-
-    totpAvailable.value = !!data.totpEnabled
-    if (!totpAvailable.value && mode.value === 'totp_only') {
-      mode.value = 'password'
-    }
-  } catch {
-    if (currentSeq !== totpStatusSeq) return
-    totpAvailable.value = false
-    if (mode.value === 'totp_only') mode.value = 'password'
-  }
-}
-
 async function handleLogin() {
   if (!username.value.trim()) {
     error.value = t('auth.login.err.needUsername')
@@ -289,13 +216,13 @@ async function handleLogin() {
   error.value = ''
   try {
     await auth.login(username.value, password.value, totp.value || undefined)
-    await router.replace(needsRegistration.value ? '/register' : '/')
+    // 初始管理员登录会在服务端完成 bootstrap；始终进入后台
+    await router.replace('/')
   } catch (e) {
     const msg = String(e.message || '')
     // 后端在密码正确但缺 TOTP 时返回 totpRequired（中/英/繁）
     if (/需要两步|需要驗證|兩步驗證|totpRequired|Two-Factor|two-factor|2FA code required|验证码|驗證碼/i.test(msg)) {
       needTotp.value = true
-      // 若消息本身已说明需要验证码，直接展示；否则用统一文案
       error.value = /需要|required|驗證|验证/i.test(msg) ? msg : t('auth.login.err.needTotp')
     } else if (/验证码错误|驗證碼錯誤|invalidTotp|Invalid.*code|验证码/i.test(msg)) {
       needTotp.value = true
@@ -307,43 +234,6 @@ async function handleLogin() {
     loading.value = false
   }
 }
-
-async function handleLoginTotp() {
-  if (!username.value.trim()) {
-    error.value = t('auth.login.err.needUsername')
-    return
-  }
-  if (!totp.value) {
-    error.value = t('auth.login.err.needTotp')
-    return
-  }
-
-  loading.value = true
-  error.value = ''
-  try {
-    await auth.loginTotp(username.value, totp.value)
-    await router.replace(needsRegistration.value ? '/register' : '/')
-  } catch (e) {
-    error.value = e.message
-  } finally {
-    loading.value = false
-  }
-}
-
-watch(username, (next) => {
-  if (totpStatusTimer) clearTimeout(totpStatusTimer)
-
-  const trimmed = String(next || '').trim()
-  if (!trimmed) {
-    totpAvailable.value = false
-    if (mode.value === 'totp_only') mode.value = 'password'
-    return
-  }
-
-  totpStatusTimer = setTimeout(() => {
-    checkTotpStatus(trimmed)
-  }, 220)
-})
 
 onMounted(() => {
   const authNotice = consumeAuthNotice()
@@ -376,7 +266,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  if (totpStatusTimer) clearTimeout(totpStatusTimer)
   document.removeEventListener('click', closeThemeMenu)
 
   if (systemThemeQuery?.removeEventListener) systemThemeQuery.removeEventListener('change', handleSystemThemeChange)
@@ -433,7 +322,6 @@ onBeforeUnmount(() => {
 .login-link-left{justify-self:start}
 .login-link-right{justify-self:end;text-align:right}
 .login-lang-select{min-width:0;max-width:132px;flex:1}
-.login-switch{margin-top:12px;text-align:center}
 .login-footer{margin-top:20px;text-align:center;font-size:12px;color:var(--text3)}
 
 @media (max-width: 480px){

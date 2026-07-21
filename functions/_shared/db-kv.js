@@ -288,6 +288,8 @@ export class KVStore {
     const msg = { id, user_id: userId, direction, content: fullContent, message_type: messageType, telegram_message_id: telegramMessageId, created_at: ts }
     await this.kv.put(`msg:${userId}:${id}`, JSON.stringify(msg))
     await this.kv.put(`recent:${userId}`, JSON.stringify({ user_id: userId, last_message: compact, last_direction: direction, last_at: ts }))
+    // 使统计缓存失效
+    await this.kv.delete('stats:cache').catch(() => {})
     _invalidateListsContaining('msg:')
     _invalidateListsContaining('recent:')
   }
@@ -343,19 +345,27 @@ export class KVStore {
     return msgs.filter(msg => String(msg?.created_at || '') > since).slice(0, limit)
   }
   async getRecentConvs(limit = 40) {
-    const convs = (await Promise.all((await kvListAll(this.kv, 'recent:')).map(async k => {
+    const safeLimit = Math.min(Math.max(1, Number(limit) || 40), 200)
+    const keys = await kvListAll(this.kv, 'recent:')
+    // 只取最近一批 key 对应记录，避免全量 get 用户详情后再截断
+    const rawConvs = (await Promise.all(keys.map(async k => {
       const d = await this.kv.get(k.name)
       if (!d) return null
-      const c = JSON.parse(d)
+      try { return JSON.parse(d) } catch { return null }
+    }))).filter(Boolean)
+    rawConvs.sort((a, b) => new Date(b.last_at) - new Date(a.last_at))
+    const top = rawConvs.slice(0, safeLimit)
+    const convs = await Promise.all(top.map(async c => {
       const u = await this.getUser(c.user_id)
       return { ...c, ...(u || {}) }
-    }))).filter(Boolean)
-    convs.sort((a, b) => new Date(b.last_at) - new Date(a.last_at))
-    return convs.slice(0, limit)
+    }))
+    return convs
   }
   async getRecentConvsSince(since, limit = 40) {
-    const convs = await this.getRecentConvs(Number.MAX_SAFE_INTEGER)
-    return convs.filter(conv => String(conv?.last_at || '') > since).slice(0, limit)
+    const safeLimit = Math.min(Math.max(1, Number(limit) || 40), 200)
+    // 多取一些再过滤，避免 since 过滤后不足
+    const convs = await this.getRecentConvs(Math.min(safeLimit * 3, 200))
+    return convs.filter(conv => String(conv?.last_at || '') > since).slice(0, safeLimit)
   }
   async getAllMsgsRaw() {
     return (await Promise.all((await kvListAll(this.kv, 'msg:')).map(k => this.kv.get(k.name).then(d => d ? JSON.parse(d) : null)))).filter(Boolean)
@@ -418,31 +428,100 @@ export class KVStore {
   }
   async delVerify(userId) { await this.kv.delete(`verify:${userId}`).catch(() => {}) }
 
-  // Stats
+  // Stats — 优先读缓存计数器，避免每次全量 list+get
+  async _readStatsCache() {
+    try {
+      const raw = await this.kv.get('stats:cache')
+      if (!raw) return null
+      const data = JSON.parse(raw)
+      if (!data || typeof data !== 'object') return null
+      // 缓存 30s 内可直接返回
+      if (Date.now() - (Number(data.updatedAt) || 0) > 30000) return null
+      return {
+        totalUsers: Number(data.totalUsers) || 0,
+        blockedUsers: Number(data.blockedUsers) || 0,
+        totalMessages: Number(data.totalMessages) || 0,
+        todayMessages: Number(data.todayMessages) || 0,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  async _writeStatsCache(stats) {
+    const today = new Date().toISOString().slice(0, 10)
+    const payload = {
+      ...stats,
+      day: today,
+      updatedAt: Date.now(),
+    }
+    await this.kv.put('stats:cache', JSON.stringify(payload)).catch(() => {})
+  }
+
   async getStats() {
+    const cached = await this._readStatsCache()
+    if (cached) return cached
+
     const [userKeys, msgKeys] = await Promise.all([kvListAll(this.kv, 'user:'), kvListAll(this.kv, 'msg:')])
-    const userData = await Promise.all(userKeys.map(k => this.kv.get(k.name)))
-    const blockedCount = userData.reduce((n, d) => n + (d && JSON.parse(d).is_blocked ? 1 : 0), 0)
-    const verifiedCount = userData.reduce((n, d) => n + (d && JSON.parse(d).is_verified ? 1 : 0), 0)
+    // 分批 get，避免一次拉爆
+    let blockedCount = 0
+    let verifiedCount = 0
+    const BATCH = 50
+    for (let i = 0; i < userKeys.length; i += BATCH) {
+      const slice = userKeys.slice(i, i + BATCH)
+      const userData = await Promise.all(slice.map(k => this.kv.get(k.name)))
+      for (const d of userData) {
+        if (!d) continue
+        try {
+          const u = JSON.parse(d)
+          if (u.is_verified) verifiedCount++
+          if (u.is_blocked && u.is_verified) blockedCount++
+        } catch { /* noop */ }
+      }
+    }
     const today = new Date().toISOString().slice(0, 10)
     let todayMsgs = 0
     for (const k of msgKeys) {
       const ts = parseInt(k.name.split(':')[2]?.split('_')[0], 10)
       if (!isNaN(ts) && new Date(ts).toISOString().slice(0, 10) === today) todayMsgs++
     }
-    return { totalUsers: verifiedCount, blockedUsers: blockedCount, totalMessages: msgKeys.length, todayMessages: todayMsgs }
+    const stats = { totalUsers: verifiedCount, blockedUsers: blockedCount, totalMessages: msgKeys.length, todayMessages: todayMsgs }
+    await this._writeStatsCache(stats)
+    return stats
   }
 
   // Web users
   async webUserCount() { return (await kvListAll(this.kv, 'webuser:')).length }
-  async createWebUser(username, passwordHash) {
+  /**
+   * @param {string} username
+   * @param {string} passwordHash
+   * @param {{ isAdmin?: boolean }} [opts] 默认非管理员；bootstrap/正式注册需显式 isAdmin:true
+   */
+  async createWebUser(username, passwordHash, opts = {}) {
     const id = `${Date.now()}_${Math.random().toString(36).substr(2, 8)}`
-    const user = { id, username, password_hash: passwordHash, totp_secret: null, totp_enabled: 0, is_admin: 1, created_at: new Date().toISOString() }
+    const isAdmin = opts?.isAdmin === true || opts?.isAdmin === 1 || opts?.isAdmin === '1'
+    const user = {
+      id,
+      username,
+      password_hash: passwordHash,
+      totp_secret: null,
+      totp_enabled: 0,
+      is_admin: isAdmin ? 1 : 0,
+      created_at: new Date().toISOString(),
+    }
     await this.kv.put(`webuser:${username.toLowerCase()}`, JSON.stringify(user))
     await this.kv.put(`webuser_id:${id}`, JSON.stringify(user))
     _invalidateListsContaining('webuser:')
     _invalidateListsContaining('webuser_id:')
     return user
+  }
+
+  async setWebUserAdmin(id, isAdmin) {
+    const u = await this.getWebUserById(id)
+    if (!u) return null
+    u.is_admin = isAdmin ? 1 : 0
+    await this._saveWebUser(u)
+    return u
   }
   async getWebUser(username) { const d = await this.kv.get(`webuser:${username.toLowerCase()}`); return d ? JSON.parse(d) : null }
   async getWebUserById(id) { const d = await this.kv.get(`webuser_id:${id}`); return d ? JSON.parse(d) : null }
@@ -488,6 +567,7 @@ export class KVStore {
       'dedupe:',
       'lock:user:',
       'lock:thread:',
+      'stats:',
     ]
 
     for (const prefix of prefixes) {

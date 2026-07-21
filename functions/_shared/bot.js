@@ -20,32 +20,57 @@ function rowsN(items, cols, mk) {
   return rows;
 }
 
+/** CSPRNG 整数 [0, max) */
+function secureRandomInt(max) {
+  const n = Math.max(1, Math.floor(max));
+  if (n <= 1) return 0;
+  // rejection sampling，避免模偏差
+  const maxUnbiased = Math.floor(0x100000000 / n) * n;
+  const buf = new Uint32Array(1);
+  let x;
+  do {
+    crypto.getRandomValues(buf);
+    x = buf[0];
+  } while (x >= maxUnbiased);
+  return x % n;
+}
+
+/** Fisher–Yates 洗牌（CSPRNG） */
+function secureShuffle(list) {
+  const arr = [...list];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = secureRandomInt(i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 /** 随机生成一道整数四则运算题（保证结果为正整数、除法整除） */
 function generateMathQuestion() {
   const ops = ['+', '-', '×', '÷'];
-  const op = ops[Math.floor(Math.random() * ops.length)];
+  const op = ops[secureRandomInt(ops.length)];
   let a, b, answer;
 
   switch (op) {
     case '+':
-      a = Math.floor(Math.random() * 20) + 1;   // 1-20
-      b = Math.floor(Math.random() * 20) + 1;
+      a = secureRandomInt(20) + 1;   // 1-20
+      b = secureRandomInt(20) + 1;
       answer = a + b;
       break;
     case '-':
-      answer = Math.floor(Math.random() * 20) + 1; // 保证结果为正
-      b = Math.floor(Math.random() * 20) + 1;
+      answer = secureRandomInt(20) + 1; // 保证结果为正
+      b = secureRandomInt(20) + 1;
       a = answer + b;
       break;
     case '×':
-      a = Math.floor(Math.random() * 9) + 2;    // 2-10
-      b = Math.floor(Math.random() * 9) + 2;
+      a = secureRandomInt(9) + 2;    // 2-10
+      b = secureRandomInt(9) + 2;
       answer = a * b;
       break;
     case '÷':
-      b = Math.floor(Math.random() * 9) + 2;    // 2-10，除数不为 0
-      answer = Math.floor(Math.random() * 9) + 2; // 2-10
-      a = b * answer;                              // 保证整除
+      b = secureRandomInt(9) + 2;    // 2-10，除数不为 0
+      answer = secureRandomInt(9) + 2; // 2-10
+      a = b * answer;                // 保证整除
       break;
   }
 
@@ -55,12 +80,13 @@ function generateMathQuestion() {
 function mkMathVerify() {
   const { q, a, answerNum } = generateMathQuestion();
   const opts = new Set([answerNum]);
-  while (opts.size < VERIFY_OPTION_COUNT) {
+  let guard = 0;
+  while (opts.size < VERIFY_OPTION_COUNT && guard++ < 80) {
     // 生成相近的干扰选项
-    const c = answerNum + Math.floor(Math.random() * 15) - 7;
+    const c = answerNum + secureRandomInt(15) - 7;
     if (c > 0 && c !== answerNum) opts.add(c);
   }
-  const arr = [...opts].sort(() => Math.random() - 0.5).map(String);
+  const arr = secureShuffle([...opts]).map(String);
   return {
     question: `<b>${q} = ?</b>`,
     answer: a,
@@ -444,7 +470,7 @@ async function withUserLock(kv, userLockId, fn, { ttlSeconds = 60, retries = 8, 
       }
     }
     if (i < retries - 1) {
-      await new Promise(r => setTimeout(r, waitMs + Math.floor(Math.random() * 80)));
+      await new Promise(r => setTimeout(r, waitMs + secureRandomInt(80)));
     }
   }
 
@@ -994,7 +1020,7 @@ async function handleMsg(msg, { tg, db, kv, settings, baseUrl, t, waitUntil }) {
           const code       = generateCode(captchaType);
           await kv.put(`captcha_render:${captchaId}`, code, { expirationTtl: timeout + 60 });
           const wrongs     = generateWrongOptions(code, captchaType, VERIFY_OPTION_COUNT - 1);
-          const opts       = [code, ...wrongs].sort(() => Math.random() - 0.5);
+          const opts       = secureShuffle([code, ...wrongs]);
           const kb         = rowsN(opts, VERIFY_OPTION_COLUMNS, o => ({ text: o, callback_data: `iv:${o}:${captchaId}` }));
           const typeLabel  = captchaType === 'image_alphanumeric' ? t('verify.imgAlpha') : t('verify.imgNum');
           const caption    = t('verify.image', { typeLabel });

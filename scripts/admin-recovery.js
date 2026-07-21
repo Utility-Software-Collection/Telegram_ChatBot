@@ -36,7 +36,7 @@ function usage(exitCode = 0) {
   help                         显示帮助
 
 选项:
-  --password <pwd>             指定新密码（至少 6 位）
+  --password <pwd>             指定新密码（≥10 位，含字母与数字）
   --yes, -y                    跳过确认
   --json                       JSON 输出（list/show/bootstrap）
   --active-db <kv|d1|hyperdrive>
@@ -286,7 +286,7 @@ async function resolvePassword(opts) {
   const { validatePassword, genToken } = await import(fileUrl(path.join(ROOT, 'functions/_shared/auth.js')))
   if (opts.password !== undefined) {
     if (!validatePassword(opts.password)) {
-      printErr('密码长度至少 6 位')
+      printErr('密码不符合策略：≥10 位，须含字母与数字，且不能是常见弱口令')
       process.exit(1)
     }
     return { password: opts.password, generated: false }
@@ -355,7 +355,7 @@ async function cmdCreate(opts, username) {
     process.exit(1)
   }
   const { hashPw } = await import(fileUrl(path.join(ROOT, 'functions/_shared/auth.js')))
-  const user = await db.createWebUser(username, await hashPw(password))
+  const user = await db.createWebUser(username, await hashPw(password), { isAdmin: true })
   print(`active_db: ${active}`)
   print(`已创建管理员: ${user.username} (${user.id})`)
   if (generated) {
@@ -372,7 +372,7 @@ async function cmdHashPassword(opts, maybePassword) {
   const password = opts.password !== undefined ? opts.password : maybePassword
   const { validatePassword, hashPw } = await import(fileUrl(path.join(ROOT, 'functions/_shared/auth.js')))
   if (!validatePassword(password)) {
-    printErr('密码长度至少 6 位')
+    printErr('密码不符合策略：≥10 位，须含字母与数字，且不能是常见弱口令')
     printErr('用法: node scripts/admin-recovery.js hash-password <password>')
     process.exit(1)
   }

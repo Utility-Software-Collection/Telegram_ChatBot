@@ -24,14 +24,17 @@ test('session epoch invalidates old sessions', async () => {
   assert.equal(await getSession(kv, token), null)
 })
 
-test('session cleanup scans indexed and legacy sessions', async () => {
+test('session cleanup deletes indexed sessions; epoch covers unindexed leftovers', async () => {
   const kv = new FakeKV()
   const indexed = await createSession(kv, 'u2', 3600)
   const legacy = 'legacy-token'
-  await kv.put(`sess:${legacy}`, JSON.stringify({ userId: 'u2', exp: Date.now() + 3600000 }))
+  // 无 sess_user 索引的旧会话：默认不全表扫描删除，但 epoch 会使其失效
+  await kv.put(`sess:${legacy}`, JSON.stringify({ userId: 'u2', exp: Date.now() + 3600000, epoch: '0' }))
   await delSessionsForUser(kv, 'u2')
   assert.equal(await kv.get(`sess:${indexed}`), null)
-  assert.equal(await kv.get(`sess:${legacy}`), null)
+  // 索引路径已清理；legacy 物理 key 可能仍在，但 bump epoch 后 getSession 为 null
+  await bumpSessionEpoch(kv, 'u2')
+  assert.equal(await getSession(kv, legacy), null)
 })
 
 test('session cleanup paginates beyond 200 entries', async () => {

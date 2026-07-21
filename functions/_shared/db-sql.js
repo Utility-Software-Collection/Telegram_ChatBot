@@ -1,5 +1,12 @@
+// 旧版文本封装（仍支持导入）
 const TGCB_SQL_BASE64_PREFIX = '-- TGCB_SQL_BASE64 '
 const TGCB_SQL_AES_PREFIX = '-- TGCB_SQL_AES256GCM '
+
+// 新版二进制包：TGCB + ver + flags + salt(16) + iv(12) + ciphertext
+// 用记事本打开即为乱码，无法直接阅读 SQL
+const TGCB_BIN_MAGIC = new Uint8Array([0x54, 0x47, 0x43, 0x42]) // "TGCB"
+const TGCB_BIN_VERSION = 0x01
+const TGCB_BIN_FLAG_AES = 0x01
 
 const BUSINESS_TABLES = {
   settings: ['key', 'value'],
@@ -88,7 +95,8 @@ async function deriveAesKey(password, salt) {
   )
 }
 
-async function encryptSqlPayloadAes(rawSql, password) {
+/** 新版：纯二进制 AES-GCM 包（打开即乱码） */
+async function encryptSqlPayloadBinary(rawSql, password) {
   if (!password) throw new Error('AES password is required')
 
   const salt = crypto.getRandomValues(new Uint8Array(16))
@@ -98,20 +106,19 @@ async function encryptSqlPayloadAes(rawSql, password) {
   const cipherBuffer = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data)
   const cipher = new Uint8Array(cipherBuffer)
 
-  const payload = {
-    v: 1,
-    alg: 'AES-256-GCM',
-    kdf: 'PBKDF2-SHA256',
-    iterations: 120000,
-    salt: bytesToBase64(salt),
-    iv: bytesToBase64(iv),
-    data: bytesToBase64(cipher),
-  }
-
-  return `${TGCB_SQL_AES_PREFIX}${utf8ToBase64(JSON.stringify(payload))}\n`
+  // header(6) + salt(16) + iv(12) + cipher
+  const out = new Uint8Array(6 + 16 + 12 + cipher.length)
+  out.set(TGCB_BIN_MAGIC, 0)
+  out[4] = TGCB_BIN_VERSION
+  out[5] = TGCB_BIN_FLAG_AES
+  out.set(salt, 6)
+  out.set(iv, 22)
+  out.set(cipher, 34)
+  return out
 }
 
-async function decryptSqlPayloadAes(wrappedSql, password) {
+/** 旧版文本 AES 封装解密（兼容历史导出） */
+async function decryptSqlPayloadAesText(wrappedSql, password) {
   if (!password) throw new Error('AES password is required for this SQL file')
 
   const payloadB64 = String(wrappedSql || '').trim().slice(TGCB_SQL_AES_PREFIX.length).trim()
@@ -137,17 +144,75 @@ async function decryptSqlPayloadAes(wrappedSql, password) {
   }
 }
 
+async function decryptSqlPayloadBinary(bytes, password) {
+  if (!password) throw new Error('AES password is required for this SQL file')
+  if (!(bytes instanceof Uint8Array) || bytes.length < 34 + 16) {
+    throw new Error('Invalid binary SQL export payload')
+  }
+  for (let i = 0; i < 4; i++) {
+    if (bytes[i] !== TGCB_BIN_MAGIC[i]) throw new Error('Invalid binary SQL magic')
+  }
+  if (bytes[4] !== TGCB_BIN_VERSION) throw new Error('Unsupported binary SQL version')
+  if (!(bytes[5] & TGCB_BIN_FLAG_AES)) throw new Error('Unsupported binary SQL flags')
+
+  const salt = bytes.subarray(6, 22)
+  const iv = bytes.subarray(22, 34)
+  const data = bytes.subarray(34)
+  const key = await deriveAesKey(password, salt)
+  try {
+    const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
+    return new TextDecoder().decode(new Uint8Array(plainBuffer))
+  } catch {
+    throw new Error('Invalid AES password or corrupted SQL payload')
+  }
+}
+
+function isBinaryTgcb(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 6) return false
+  return bytes[0] === 0x54 && bytes[1] === 0x47 && bytes[2] === 0x43 && bytes[3] === 0x42
+}
+
 function decodeBase64WrappedSql(wrappedSql) {
   const payload = String(wrappedSql || '').trim().slice(TGCB_SQL_BASE64_PREFIX.length).trim()
   if (!payload) throw new Error('Invalid Base64 SQL export payload')
   return base64ToUtf8(payload)
 }
 
-async function decodeSqlByMode(sqlText, password = '') {
-  const raw = String(sqlText || '').trim()
-  if (raw.startsWith(TGCB_SQL_AES_PREFIX)) return decryptSqlPayloadAes(raw, password)
+/**
+ * 解码导入载荷。
+ * 支持：
+ *  - 新版二进制 AES .db 包（Uint8Array 或 base64 字符串）
+ *  - 旧版文本 AES / Base64 封装
+ *  - 旧版明文 .sql（含 TGCB_RECORD 注释行）
+ */
+async function decodeSqlByMode(input, password = '') {
+  // 二进制直接传入
+  if (input instanceof Uint8Array) {
+    if (isBinaryTgcb(input)) return decryptSqlPayloadBinary(input, password)
+    // 尝试当 UTF-8 文本处理（旧版 .sql）
+    input = new TextDecoder().decode(input)
+  }
+
+  const raw = String(input || '').trim()
+  if (!raw) throw new Error('Empty SQL payload')
+
+  // 可能是前端 base64 编码的二进制 .db 包
+  if (!raw.startsWith(TGCB_SQL_AES_PREFIX) && !raw.startsWith(TGCB_SQL_BASE64_PREFIX) && !raw.includes('TGCB_RECORD') && !raw.startsWith('--') && !raw.startsWith('BEGIN')) {
+    try {
+      const bytes = base64ToBytes(raw.replace(/\s+/g, ''))
+      if (isBinaryTgcb(bytes)) return decryptSqlPayloadBinary(bytes, password)
+    } catch { /* not base64 binary */ }
+  }
+
+  if (raw.startsWith(TGCB_SQL_AES_PREFIX)) return decryptSqlPayloadAesText(raw, password)
   if (raw.startsWith(TGCB_SQL_BASE64_PREFIX)) return decodeBase64WrappedSql(raw)
-  return String(sqlText || '')
+
+  // 旧版明文 .sql（必须含 TGCB_RECORD，避免误导入任意 SQL）
+  if (raw.includes('TGCB_RECORD') || raw.includes('-- TGCB_RECORD')) {
+    return String(input || '')
+  }
+
+  throw new Error('Unsupported SQL format: use encrypted .db export, or legacy .sql with TGCB_RECORD markers')
 }
 
 function buildPlainSqlFromRecords(records, activeDb) {
@@ -171,9 +236,29 @@ function buildPlainSqlFromRecords(records, activeDb) {
   return lines.join('\n')
 }
 
+const DEFAULT_SECRET_SETTING_KEYS = [
+  'BOT_TOKEN',
+  'WEBHOOK_SECRET',
+  'TURNSTILE_SECRET_KEY',
+  'RECAPTCHA_SECRET_KEY',
+  'RECAPTCHA_V3_SECRET_KEY',
+  'HCAPTCHA_SECRET_KEY',
+]
+
+/**
+ * 导出业务数据为加密二进制包（Uint8Array）。
+ * 打开文件即为乱码，无法直接阅读。
+ * options.password 必填；includeSecrets 控制是否包含 BOT_TOKEN 等密钥。
+ */
 export async function exportBusinessDataSql(store, activeDb = 'kv', options = {}) {
-  const mode = String(options?.mode || 'base64').toLowerCase()
   const password = String(options?.password || '')
+  if (!password) throw new Error('AES password is required')
+
+  const includeSecrets = options?.includeSecrets === true
+  const secretKeys = Array.isArray(options?.secretKeys) && options.secretKeys.length
+    ? options.secretKeys
+    : DEFAULT_SECRET_SETTING_KEYS
+  const secretKeySet = new Set(secretKeys.map((k) => String(k)))
 
   const [settings, users, whitelist, messages, recentConvs] = await Promise.all([
     store.getAllSettings(),
@@ -183,8 +268,13 @@ export async function exportBusinessDataSql(store, activeDb = 'kv', options = {}
     store.getAllRecentRaw(),
   ])
 
+  // 默认剥离密钥字段；仅 includeSecrets 时保留完整值
+  const settingsEntries = Object.entries(settings || {})
+    .filter(([key]) => includeSecrets || !secretKeySet.has(String(key)))
+    .map(([key, value]) => normalizeRecord('settings', { key, value }))
+
   const records = {
-    settings: Object.entries(settings || {}).map(([key, value]) => normalizeRecord('settings', { key, value })),
+    settings: settingsEntries,
     users: (users || []).map((item) => normalizeRecord('users', item)),
     whitelist: (whitelist || []).map((item) => normalizeRecord('whitelist', item)),
     messages: (messages || []).map((item) => normalizeRecord('messages', item)),
@@ -192,14 +282,15 @@ export async function exportBusinessDataSql(store, activeDb = 'kv', options = {}
   }
 
   const plainSql = buildPlainSqlFromRecords(records, activeDb)
-
-  if (mode === 'plain') return `${plainSql}\n`
-  if (mode === 'aes') return encryptSqlPayloadAes(plainSql, password)
-  return `${TGCB_SQL_BASE64_PREFIX}${utf8ToBase64(plainSql)}\n`
+  // 始终返回二进制 AES 包
+  return encryptSqlPayloadBinary(plainSql, password)
 }
 
-export async function parseBusinessSql(sqlText, options = {}) {
-  const decodedSql = await decodeSqlByMode(sqlText, String(options?.password || ''))
+/**
+ * 解析导入载荷（二进制 Uint8Array / base64 字符串 / 旧版文本封装）。
+ */
+export async function parseBusinessSql(sqlInput, options = {}) {
+  const decodedSql = await decodeSqlByMode(sqlInput, String(options?.password || ''))
   const records = {
     settings: [],
     users: [],
@@ -382,7 +473,53 @@ async function restoreToPostgres(hyperdriveStore, records) {
   }
 }
 
-export async function importBusinessDataSql({ sqlText, target, kvStore, d1Store, hyperdriveStore, password = '' }) {
+/** 从当前 store 快照业务数据（用于导入失败回滚） */
+export async function snapshotBusinessRecords(store) {
+  const [settings, users, whitelist, messages, recentConvs] = await Promise.all([
+    store.getAllSettings(),
+    store.getAllUsersRaw(),
+    store.getWhitelistRaw(),
+    store.getAllMsgsRaw(),
+    store.getAllRecentRaw(),
+  ])
+  return {
+    settings: Object.entries(settings || {}).map(([key, value]) => normalizeRecord('settings', { key, value })),
+    users: (users || []).map((item) => normalizeRecord('users', item)),
+    whitelist: (whitelist || []).map((item) => normalizeRecord('whitelist', item)),
+    messages: (messages || []).map((item) => normalizeRecord('messages', item)),
+    recent_convs: (recentConvs || []).map((item) => normalizeRecord('recent_convs', item)),
+  }
+}
+
+async function restoreRecordsToTarget(target, records, { kvStore, d1Store, hyperdriveStore }) {
+  if (target === 'hyperdrive') {
+    if (!hyperdriveStore) throw new Error('Hyperdrive store is not available')
+    await restoreToPostgres(hyperdriveStore, records)
+    return
+  }
+  if (target === 'd1') {
+    if (!d1Store) throw new Error('D1 store is not available')
+    await restoreToD1(d1Store, records)
+    return
+  }
+  if (!kvStore) throw new Error('KV store is not available')
+  await restoreToKv(kvStore, records)
+}
+
+/**
+ * 导入业务数据：先完整解析，再清空并写入；失败时从快照回滚。
+ * clearFn 可选：异步清空业务数据（保留 web users）。
+ */
+export async function importBusinessDataSql({
+  sqlText,
+  target,
+  kvStore,
+  d1Store,
+  hyperdriveStore,
+  password = '',
+  clearFn = null,
+  snapshotStore = null,
+}) {
   const records = await parseBusinessSql(sqlText, { password })
   const hasAnyRecord = Object.values(records).some((items) => items.length > 0)
 
@@ -390,17 +527,33 @@ export async function importBusinessDataSql({ sqlText, target, kvStore, d1Store,
     throw new Error('SQL file does not contain any importable TGCB business records')
   }
 
-  if (target === 'hyperdrive') {
-    if (!hyperdriveStore) throw new Error('Hyperdrive store is not available')
-    await restoreToPostgres(hyperdriveStore, records)
-    return
+  // 导入前快照，失败可回滚（避免“先清空再导入”中途失败丢库）
+  let backup = null
+  if (snapshotStore && typeof snapshotStore.getAllSettings === 'function') {
+    try {
+      backup = await snapshotBusinessRecords(snapshotStore)
+    } catch (e) {
+      console.error('[import] snapshot failed, continue without rollback:', e?.message || e)
+    }
   }
 
-  if (target === 'd1') {
-    if (!d1Store) throw new Error('D1 store is not available')
-    await restoreToD1(d1Store, records)
-    return
-  }
+  const stores = { kvStore, d1Store, hyperdriveStore }
 
-  await restoreToKv(kvStore, records)
+  try {
+    if (typeof clearFn === 'function') {
+      await clearFn()
+    }
+    await restoreRecordsToTarget(target, records, stores)
+  } catch (err) {
+    if (backup) {
+      try {
+        if (typeof clearFn === 'function') await clearFn()
+        await restoreRecordsToTarget(target, backup, stores)
+        console.error('[import] restored from pre-import snapshot after failure')
+      } catch (rollbackErr) {
+        console.error('[import] rollback also failed:', rollbackErr?.message || rollbackErr)
+      }
+    }
+    throw err
+  }
 }

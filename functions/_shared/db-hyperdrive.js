@@ -561,14 +561,19 @@ export class HyperdriveStore {
   // ── Web users ───────────────────────────────────────────────────────────────────
 
   async webUserCount() { const r = await this._first('SELECT COUNT(*) as cnt FROM web_users'); return r?.cnt || 0 }
-  async createWebUser(username, passwordHash) {
+  async createWebUser(username, passwordHash, opts = {}) {
     const id = `${Date.now()}_${Math.random().toString(36).substr(2, 8)}`
     const ts = new Date().toISOString()
+    const isAdmin = opts?.isAdmin === true || opts?.isAdmin === 1 || opts?.isAdmin === '1' ? 1 : 0
     await this._execute(
-      'INSERT INTO web_users(id,username,password_hash,totp_secret,totp_enabled,is_admin,created_at) VALUES($1,$2,$3,NULL,0,1,$4)',
-      [id, username, passwordHash, ts],
+      'INSERT INTO web_users(id,username,password_hash,totp_secret,totp_enabled,is_admin,created_at) VALUES($1,$2,$3,NULL,0,$4,$5)',
+      [id, username, passwordHash, isAdmin, ts],
     )
     return this.getWebUser(username)
+  }
+  async setWebUserAdmin(id, isAdmin) {
+    await this._execute('UPDATE web_users SET is_admin=$1 WHERE id=$2', [isAdmin ? 1 : 0, id])
+    return this.getWebUserById(id)
   }
   async getWebUser(username) { return this._first('SELECT * FROM web_users WHERE LOWER(username)=LOWER($1)', [username]) }
   async getWebUserById(id) { return this._first('SELECT * FROM web_users WHERE id=$1', [id]) }

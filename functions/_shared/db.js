@@ -95,12 +95,17 @@ export class DB {
   async getStats() { return (await this._store()).getStats() }
 
   async webUserCount() { return (await this._store()).webUserCount() }
-  async createWebUser(u, h) { return (await this._store()).createWebUser(u, h) }
+  async createWebUser(u, h, opts) { return (await this._store()).createWebUser(u, h, opts) }
   async getWebUser(u) { return (await this._store()).getWebUser(u) }
   async getWebUserById(id) { return (await this._store()).getWebUserById(id) }
   async updateWebUserPassword(id, h) { return (await this._store()).updateWebUserPassword(id, h) }
   async updateWebUserUsername(id, u) { return (await this._store()).updateWebUserUsername(id, u) }
   async setWebUserTotp(id, s, e) { return (await this._store()).setWebUserTotp(id, s, e) }
+  async setWebUserAdmin(id, isAdmin) {
+    const store = await this._store()
+    if (typeof store.setWebUserAdmin === 'function') return store.setWebUserAdmin(id, isAdmin)
+    return null
+  }
 
   async clearAppDataPreserveWebUsers() {
     const active = await this.getActiveDb()

@@ -114,6 +114,13 @@ export class LocalD1 {
   }
 
   close() {
-    if (this._db) this._db.close()
+    if (!this._db) return
+    try {
+      try { this._db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* noop */ }
+      this._db.close()
+    } catch (e) {
+      console.warn('[D1] close 失败:', e?.message || e)
+    }
+    this._db = null
   }
 }

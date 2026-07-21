@@ -29,12 +29,27 @@ const ALPHA_CHARS   = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
 // ── 验证码生成 ──────────────────────────────────────────────────────────────
 
+/** 无偏差从 pool 取 len 个字符（rejection sampling） */
+function securePickChars(pool, len) {
+  const n = pool.length;
+  const maxUnbiased = Math.floor(256 / n) * n;
+  const out = [];
+  while (out.length < len) {
+    const buf = new Uint8Array(len - out.length + 4);
+    crypto.getRandomValues(buf);
+    for (const b of buf) {
+      if (b >= maxUnbiased) continue;
+      out.push(pool[b % n]);
+      if (out.length >= len) break;
+    }
+  }
+  return out.join('');
+}
+
 export function generateCode(type) {
   const pool = type === 'image_alphanumeric' ? ALPHA_CHARS : NUMERIC_CHARS;
   const len  = type === 'image_alphanumeric' ? 5 : 4;
-  const buf  = new Uint8Array(len);
-  crypto.getRandomValues(buf);
-  return Array.from(buf, b => pool[b % pool.length]).join('');
+  return securePickChars(pool, len);
 }
 
 export function generateWrongOptions(correct, type, count = 3) {

@@ -43,12 +43,11 @@ async function fetchAuthStatus() {
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
 
-  // 首次注册页必须由已登录的初始管理员访问，不能匿名抢注。
+  // 首次注册页：仅在 needsRegistration 时开放（允许匿名访问）
   if (to.path === '/register') {
     const needFirst = await fetchAuthStatus()
     if (!needFirst) return '/login'
-    const ok = await auth.checkAuth()
-    return ok ? true : '/login'
+    return true
   }
 
   // 访问其他公开页：有效会话则回首页
@@ -65,9 +64,7 @@ router.beforeEach(async (to) => {
     return true
   }
 
-  // 未登录：首次注册阶段也先登录初始管理员，再进入 /register
-  if (await fetchAuthStatus()) return '/login'
-
+  // 未登录：默认进入登录页（首次注册可通过登录页链接进入 /register）
   if (to.meta.public || AUTH_PUBLIC_PATHS.has(to.path)) return true
   return '/login'
 })

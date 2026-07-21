@@ -112,10 +112,6 @@ export const useAuthStore = defineStore('auth', () => {
     return _doLogin({ username: u, password: p, totp: totpCode })
   }
 
-  async function loginTotp(u, totpCode) {
-    return _doLogin({ username: u, totp: totpCode, loginMode: 'totp_only' })
-  }
-
   function resetState() {
     token.value = ''
     username.value = ''
@@ -227,7 +223,6 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn,
     sessionReady,
     login,
-    loginTotp,
     telegramLogin,
     logout,
     checkAuth,

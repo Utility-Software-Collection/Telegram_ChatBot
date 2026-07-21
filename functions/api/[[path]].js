@@ -1,8 +1,14 @@
 ﻿// functions/api/[[path]].js
 import { DB } from '../_shared/db.js';
 import { TG } from '../_shared/tg.js';
-import { CORS, j, err, hashPw, verifyPw, createSession, getSession, delSession, rotatePasswordAndRevokeSessions, extractToken, genToken, verifyInitData } from '../_shared/auth.js';
-import { ensureAdminInitializedOnce, getBootstrapStatus, isBootstrapAdminDisabled, registerInitialAdmin, BootstrapError } from '../_shared/admin-bootstrap.js';
+import {
+  CORS, j, err, hashPw, verifyPw, createSession, getSession, delSession,
+  delSessionsForUser, bumpSessionEpoch,
+  rotatePasswordAndRevokeSessions, extractToken, genToken, verifyInitData,
+  getClientIp, checkAuthRateLimit, recordAuthFailure, clearAuthFailures,
+  validatePassword, validatePasswordReason, isLegacyPasswordHash,
+} from '../_shared/auth.js';
+import { ensureAdminInitializedOnce, getBootstrapStatus, isBootstrapAdminDisabled, registerInitialAdmin, adoptBootstrapAdmin, BootstrapError } from '../_shared/admin-bootstrap.js';
 import { verifyTOTP, generateTOTPSecret } from '../_shared/totp.js';
 import { renderCaptchaPNG } from '../_shared/captcha.js';
 import { setupMiniAppMenu, getOrCreateThread } from '../_shared/bot.js';
@@ -107,29 +113,37 @@ export async function onRequest({ request, env, waitUntil }) {
       const { username, password } = await request.json();
       if (!username || !password) return err(t('common.missingParams'));
       if (username.length < 3) return err(t('auth.usernameMin'));
-      if (password.length < 6) return err(t('auth.passwordMin'));
+      if (!validatePassword(password)) return err(t('auth.passwordMin'));
 
-      // 首次注册必须由当前初始管理员会话发起，不能仅凭公开状态标志注册管理员。
+      // pending 阶段允许公开首次注册（无需先登录初始管理员）。
+      // 若当前会话恰好是初始管理员，则传入 bootstrapUserId 做额外一致性校验。
+      let bootstrapUserId = null
       const bootstrapTokenValue = extractToken(request)
-      const bootstrapSession = bootstrapTokenValue ? await getSession(kv, bootstrapTokenValue) : null
-      if (!bootstrapSession) return err(t('auth.unauthorized'), 401)
-      const bootstrapUser = await db.getWebUserById(bootstrapSession.userId)
-      if (!bootstrapUser || await isBootstrapAdminDisabled({ kv, user: bootstrapUser })) {
-        return err(t('auth.unauthorized'), 401)
+      if (bootstrapTokenValue) {
+        const bootstrapSession = await getSession(kv, bootstrapTokenValue)
+        if (bootstrapSession) {
+          const bootstrapUser = await db.getWebUserById(bootstrapSession.userId)
+          if (bootstrapUser && !(await isBootstrapAdminDisabled({ kv, user: bootstrapUser }))) {
+            bootstrapUserId = bootstrapUser.id
+          }
+        }
       }
 
       const user = await registerInitialAdmin({
-        db, kv, username, password, bootstrapUserId: bootstrapUser.id,
+        db, kv, username, password, bootstrapUserId,
       })
       const sessionTtl = await getLoginSessionTtl(db);
       const token = await createSession(kv, user.id, sessionTtl);
-      return new Response(JSON.stringify({ token, username: user.username, isAdmin: true }), {
+      return new Response(JSON.stringify({ username: user.username, isAdmin: true }), {
         status: 200,
         headers: { ...CORS, 'Content-Type': 'application/json', 'Set-Cookie': cookie(token, sessionTtl, { secure: isSecureRequest(request) }) },
       });
     } catch (e) {
       console.error('[API Error] auth.registerFailed:', e?.message || e);
-      return err(t('auth.registerFailed'), e instanceof BootstrapError ? e.status || 500 : 500);
+      const status = e instanceof BootstrapError ? e.status || 500 : 500;
+      // BootstrapError 消息已是可读文案，优先返回；否则用通用失败文案
+      if (e instanceof BootstrapError && e.message) return err(e.message, status);
+      return err(t('auth.registerFailed'), status);
     }
   }
 
@@ -142,37 +156,73 @@ export async function onRequest({ request, env, waitUntil }) {
     }
 
     try {
-      const { username, password, totp, loginMode } = parsedBody;
+      const { username, password, totp } = parsedBody;
+      const ip = getClientIp(request);
+      const rateId = { ip, username };
+
+      // 拒绝已废弃的 totp_only：2FA 不得作为唯一因子
+      if (parsedBody.loginMode === 'totp_only') {
+        return err(t('auth.missingPassword'), 400);
+      }
+
+      const rate = await checkAuthRateLimit(kv, 'login', rateId);
+      if (!rate.allowed) {
+        return err(t('auth.tooManyAttempts', { seconds: rate.retryAfterSec }), 429);
+      }
 
       const user = await db.getWebUser(username);
-      if (!user) return err(t('auth.invalidCredentials'), 401);
+      if (!user) {
+        await recordAuthFailure(kv, 'login', rateId);
+        return err(t('auth.invalidCredentials'), 401);
+      }
 
       // 若初始管理员已被禁用，阻止该账号登录（按 ID，不限于用户名 admin）
-      if (await isBootstrapAdminDisabled({ kv, user })) return err(t('auth.invalidCredentials'), 401);
+      if (await isBootstrapAdminDisabled({ kv, user })) {
+        await recordAuthFailure(kv, 'login', rateId);
+        return err(t('auth.invalidCredentials'), 401);
+      }
 
-      // loginMode: 'totp_only' — 仅用户名 + TOTP（无密码）
-      if (loginMode === 'totp_only') {
-        if (!user.totp_enabled) return err(t('auth.totpNotEnabled'), 401);
-        if (!totp) return err(t('auth.missingTotp'), 401);
-        if (!await verifyTOTP(totp, user.totp_secret)) return err(t('auth.invalidTotp'), 401);
-      } else {
-        // 普通模式：用户名 + 密码；若已启用 2FA 必须同时校验 TOTP
-        if (!password) return err(t('auth.missingPassword'));
-        if (!await verifyPw(password, user.password_hash)) return err(t('auth.invalidCredentials'), 401);
-        if (user.totp_enabled) {
-          if (!totp) {
-            // 密码正确但缺第二因子：提示前端补充 TOTP
-            return err(t('auth.totpRequired'), 401);
-          }
-          if (!await verifyTOTP(totp, user.totp_secret)) return err(t('auth.invalidTotp'), 401);
+      // 始终要求密码；若已启用 2FA 必须同时校验 TOTP
+      if (!password) return err(t('auth.missingPassword'));
+      if (!await verifyPw(password, user.password_hash)) {
+        await recordAuthFailure(kv, 'login', rateId);
+        return err(t('auth.invalidCredentials'), 401);
+      }
+      if (user.totp_enabled) {
+        if (!totp) {
+          // 密码正确但缺第二因子：提示前端补充 TOTP（不记失败，避免误伤）
+          return err(t('auth.totpRequired'), 401);
+        }
+        if (!await verifyTOTP(totp, user.totp_secret)) {
+          await recordAuthFailure(kv, 'login', rateId);
+          return err(t('auth.invalidTotp'), 401);
         }
       }
 
-      // 登录成功
+      // 登录成功：清除失败计数；旧版 sha256 哈希静默升级为 PBKDF2
+      await clearAuthFailures(kv, 'login', rateId);
+      if (isLegacyPasswordHash(user.password_hash)) {
+        try {
+          await db.updateWebUserPassword(user.id, await hashPw(password));
+        } catch (e) {
+          console.error('[API] legacy password rehash failed:', e?.message || e);
+        }
+      }
+
+      // 初始管理员在 pending 阶段登录：视为采用该账号，关闭首次注册，直接进入后台
+      try {
+        const status = await getBootstrapStatus({ db, kv })
+        if (status?.needsRegistration && status?.defaultAdminId === user.id) {
+          await adoptBootstrapAdmin({ db, kv, userId: user.id })
+        }
+      } catch (e) {
+        console.error('[API] adopt bootstrap on login failed:', e?.message || e)
+      }
 
       const sessionTtl = await getLoginSessionTtl(db);
       const token = await createSession(kv, user.id, sessionTtl);
-      return new Response(JSON.stringify({ token, username: user.username, isAdmin: Boolean(user.is_admin), totpEnabled: Boolean(user.totp_enabled) }), {
+      // 不在 JSON 体回传 session token，仅依赖 HttpOnly Cookie
+      return new Response(JSON.stringify({ username: user.username, isAdmin: Boolean(user.is_admin), totpEnabled: Boolean(user.totp_enabled) }), {
         status: 200,
         headers: { ...CORS, 'Content-Type': 'application/json', 'Set-Cookie': cookie(token, sessionTtl, { secure: isSecureRequest(request) }) },
       });
@@ -202,35 +252,48 @@ export async function onRequest({ request, env, waitUntil }) {
     return j({ username: user.username, isAdmin: Boolean(user.is_admin), totpEnabled: Boolean(user.totp_enabled) });
   }
 
-  // 检查用户名是否启用了 2FA（公开接口，供登录页判断登录模式）
+  // 历史兼容：不再泄露用户是否存在 / 是否启用 2FA，恒定返回 false
   if (path === '/auth/totp-status' && request.method === 'POST') {
     try {
-      const { username } = await request.json();
-      const user = await db.getWebUser(username || '');
-      return j({ totpEnabled: Boolean(user?.totp_enabled) });
-    } catch {
-      return j({ totpEnabled: false });
-    }
+      const body = await request.json().catch(() => ({}));
+      const ip = getClientIp(request);
+      const rateId = { ip, username: body?.username };
+      const rate = await checkAuthRateLimit(kv, 'totpStatus', rateId);
+      if (!rate.allowed) {
+        return err(t('auth.tooManyAttempts', { seconds: rate.retryAfterSec }), 429);
+      }
+      await recordAuthFailure(kv, 'totpStatus', rateId);
+    } catch { /* noop */ }
+    return j({ totpEnabled: false });
   }
 
   if (path === '/auth/recover' && request.method === 'POST') {
     try {
       const { username, totp, newPassword } = await request.json();
-      if (!username || !newPassword) return err(t('common.missingParams'));
-      if (newPassword.length < 6) return err(t('auth.passwordMin'));
+      if (!username || !newPassword || !totp) return err(t('common.missingParams'));
+      if (!validatePassword(newPassword)) return err(t('auth.passwordMin'));
+
+      const ip = getClientIp(request);
+      const rateId = { ip, username };
+      const rate = await checkAuthRateLimit(kv, 'recover', rateId);
+      if (!rate.allowed) {
+        return err(t('auth.tooManyAttempts', { seconds: rate.retryAfterSec }), 429);
+      }
 
       const user = await db.getWebUser(username);
-      if (!user) return err(t('auth.invalidCredentials'), 401);
-      // 已退役的初始管理员不允许通过找回密码重新启用
-      if (await isBootstrapAdminDisabled({ kv, user })) return err(t('auth.invalidCredentials'), 401);
+      // 未启用 2FA 的账号禁止在线自助重置（改用运维 CLI）；不区分「无用户 / 未开 2FA」
+      if (!user || !user.totp_enabled || await isBootstrapAdminDisabled({ kv, user })) {
+        await recordAuthFailure(kv, 'recover', rateId);
+        return err(t('auth.invalidCredentials'), 401);
+      }
 
-      // 已启用 2FA 必须校验 TOTP；未启用的可直接重置密码
-      if (user.totp_enabled) {
-        if (!totp) return err(t('auth.missingTotp'), 401);
-        if (!await verifyTOTP(totp, user.totp_secret)) return err(t('auth.invalidTotp'), 401);
+      if (!await verifyTOTP(totp, user.totp_secret)) {
+        await recordAuthFailure(kv, 'recover', rateId);
+        return err(t('auth.invalidTotp'), 401);
       }
 
       await rotatePasswordAndRevokeSessions({ db, kv, userId: user.id, newPassword });
+      await clearAuthFailures(kv, 'recover', rateId);
       return j({ ok: true });
     } catch {
       return err(t('auth.recoverFailed'), 500);
@@ -243,7 +306,7 @@ export async function onRequest({ request, env, waitUntil }) {
     const text = await kv.get(`captcha_render:${capMatch[1]}`);
     if (!text) return new Response(t('captcha.notFound'), { status: 404 });
     const png = await renderCaptchaPNG(text, capMatch[1]);
-    return new Response(png, { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300', ...CORS } });
+    return new Response(png, { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-store, private', ...CORS } });
   }
 
   // Web 验证页面（公开）— Turnstile / reCAPTCHA / hCaptcha
@@ -437,7 +500,7 @@ export async function onRequest({ request, env, waitUntil }) {
       const { oldPassword, newPassword } = await request.json();
       if (!oldPassword || !newPassword) return err(t('common.missingParams'));
       if (!await verifyPw(oldPassword, webUser.password_hash)) return err(t('profile.oldPasswordWrong'), 401);
-      if (newPassword.length < 6) return err(t('auth.passwordMin'));
+      if (!validatePassword(newPassword)) return err(t('auth.passwordMin'));
       await rotatePasswordAndRevokeSessions({ db, kv, userId: webUser.id, newPassword });
       return j({ ok: true, reLogin: true });
     } catch {
@@ -447,14 +510,41 @@ export async function onRequest({ request, env, waitUntil }) {
 
   if (path === '/profile/2fa/setup' && request.method === 'POST') {
     try {
-      const { enable } = await request.json();
+      const body = await request.json().catch(() => ({}));
+      const enable = body?.enable;
       if (enable) {
+        // 已启用则拒绝重新 setup，避免覆盖种子
+        if (webUser.totp_enabled) return err(t('profile.operationFailed'), 400);
         const secret = generateTOTPSecret();
         await db.setWebUserTotp(webUser.id, secret, false);
         return j({ secret, qrcode: `otpauth://totp/BotAdmin:${webUser.username}?secret=${secret}&issuer=BotAdmin` });
       }
+
+      // 关闭 2FA：必须校验当前密码 + 当前 TOTP，防止会话被盗后永久降级
+      if (!webUser.totp_enabled) {
+        await db.setWebUserTotp(webUser.id, null, false);
+        return j({ ok: true });
+      }
+      const { password, totp: totpCode } = body || {};
+      if (!password || !totpCode) return err(t('common.missingParams'));
+      if (!await verifyPw(password, webUser.password_hash)) return err(t('profile.oldPasswordWrong'), 401);
+      if (!await verifyTOTP(totpCode, webUser.totp_secret)) return err(t('profile.invalidTotp'), 400);
+
       await db.setWebUserTotp(webUser.id, null, false);
-      return j({ ok: true });
+      // 吊销其他会话，迫使用新安全水位重新登录
+      await bumpSessionEpoch(kv, webUser.id);
+      await delSessionsForUser(kv, webUser.id);
+      // 保留当前请求会话：重新签发
+      const sessionTtl = await getLoginSessionTtl(db);
+      const newToken = await createSession(kv, webUser.id, sessionTtl);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          ...CORS,
+          'Content-Type': 'application/json',
+          'Set-Cookie': cookie(newToken, sessionTtl, { secure: isSecureRequest(request) }),
+        },
+      });
     } catch {
       return err(t('profile.operationFailed'), 500);
     }
@@ -462,10 +552,13 @@ export async function onRequest({ request, env, waitUntil }) {
 
   if (path === '/profile/2fa/verify' && request.method === 'POST') {
     try {
-      const { token: totpToken, secret } = await request.json();
-      if (!totpToken || !secret) return err(t('common.missingParams'));
-      if (!await verifyTOTP(totpToken, secret)) return err(t('profile.invalidTotp'), 400);
-      await db.setWebUserTotp(webUser.id, secret, true);
+      const { token: totpToken } = await request.json();
+      if (!totpToken) return err(t('common.missingParams'));
+      // 只信任服务端 pending secret（setup 写入且 enabled=false），拒绝客户端 secret
+      const pendingSecret = webUser.totp_secret;
+      if (!pendingSecret || webUser.totp_enabled) return err(t('profile.operationFailed'), 400);
+      if (!await verifyTOTP(totpToken, pendingSecret)) return err(t('profile.invalidTotp'), 400);
+      await db.setWebUserTotp(webUser.id, pendingSecret, true);
       return j({ ok: true });
     } catch {
       return err(t('profile.verifyFailed'), 500);
@@ -642,15 +735,19 @@ export async function onRequest({ request, env, waitUntil }) {
     try {
       const active = await db.getActiveDb();
       const body = await request.json().catch(() => ({}));
-      const mode = String(body?.mode || 'base64').toLowerCase();
+      // 仅支持 AES 二进制包（打开即乱码）；password 必填
       const password = String(body?.password || '');
-      if (!['plain', 'base64', 'aes'].includes(mode)) return err(t('common.missingParams'), 400);
-      if (mode === 'aes' && !password) return err(t('common.missingParams'), 400);
+      const includeSecrets = body?.includeSecrets === true || body?.includeSecrets === 1 || body?.includeSecrets === '1';
+      if (!password) return err(t('common.missingParams'), 400);
 
-      const sql = await exportBusinessDataSql(db, active, { mode, password });
-      const modeSuffix = mode === 'plain' ? 'PLAIN' : (mode === 'aes' ? 'AES' : 'BASE64');
-      const fileName = `${String(active || 'kv').toUpperCase()}_${modeSuffix}.sql`;
-      return new Response(sql, {
+      const binary = await exportBusinessDataSql(db, active, {
+        password,
+        includeSecrets,
+        secretKeys: SECRET_SETTING_KEYS,
+      });
+      const secretsSuffix = includeSecrets ? '_SECRETS' : '';
+      const fileName = `${String(active || 'kv').toUpperCase()}_AES${secretsSuffix}.db`;
+      return new Response(binary, {
         status: 200,
         headers: {
           ...CORS,
@@ -658,6 +755,8 @@ export async function onRequest({ request, env, waitUntil }) {
           'Content-Disposition': `attachment; filename="${fileName}"`,
           'Cache-Control': 'no-store',
           'X-Active-Db': active,
+          'X-Export-Secrets': includeSecrets ? '1' : '0',
+          'X-Export-Format': 'tgcb-bin-aes',
         },
       });
     } catch (e) {
@@ -668,28 +767,33 @@ export async function onRequest({ request, env, waitUntil }) {
 
   if (path === '/settings/sql/import' && request.method === 'POST') {
     try {
-      const { sql, password } = await request.json();
-      if (!sql || !String(sql).trim()) return err(t('common.missingParams'), 400);
+      const body = await request.json().catch(() => ({}));
+      // 支持：AES 二进制 .db（base64）/ 旧版文本 AES·Base64 / 旧版明文 .sql（含 TGCB_RECORD）
+      const password = String(body?.password || '');
+      const sqlPayload = body?.sql ?? body?.data ?? '';
+      if (!sqlPayload || !String(sqlPayload).trim()) return err(t('common.missingParams'), 400);
+
+      // 明文旧 .sql 可不填密码；加密包必须带密码
+      const looksPlainLegacy = typeof sqlPayload === 'string'
+        && (sqlPayload.includes('TGCB_RECORD') || sqlPayload.includes('-- TGCB_RECORD'))
+        && !sqlPayload.startsWith('-- TGCB_SQL_AES')
+        && !sqlPayload.startsWith('-- TGCB_SQL_BASE64');
+      if (!password && !looksPlainLegacy) return err(t('common.missingParams'), 400);
 
       const active = await db.getActiveDb();
-      const importPassword = String(password || '');
+      const importPassword = password;
+      const snapshotStore = await db._store();
 
-      // 先解析/解密校验，失败则绝不清空现有数据
-      const parsed = await parseBusinessSql(String(sql), { password: importPassword });
-      const hasAnyRecord = Object.values(parsed).some((items) => Array.isArray(items) && items.length > 0);
-      if (!hasAnyRecord) {
-        return err(t('settings.sqlImportEmpty'), 400);
-      }
-
-      // 校验通过后再清空并导入（importBusinessDataSql 内部会再次 parse，结果一致）
-      await db.clearAppDataPreserveWebUsers();
+      // 解析校验 + 清空 + 写入；失败自动从快照回滚
       await importBusinessDataSql({
-        sqlText: String(sql),
+        sqlText: sqlPayload,
         target: active,
         kvStore: db._kv,
         d1Store: db._d1,
         hyperdriveStore: db._hyperdrive,
         password: importPassword,
+        clearFn: () => db.clearAppDataPreserveWebUsers(),
+        snapshotStore,
       });
 
       if (db._d1 && active !== 'd1') {
@@ -982,12 +1086,13 @@ async function handleTelegramLogin(initData, db, kv, t, request) {
     let webUser = await db.getWebUser(shadowUser);
     if (!webUser) {
       const hash = await hashPw(genToken(32));
-      webUser = await db.createWebUser(shadowUser, hash);
+      // Mini App 登录仅 ADMIN_IDS 白名单用户可达，影子账号为管理员
+      webUser = await db.createWebUser(shadowUser, hash, { isAdmin: true });
     }
 
     const sessionTtl = await getLoginSessionTtl(db);
     const token = await createSession(kv, webUser.id, sessionTtl);
-    return new Response(JSON.stringify({ token, username: webUser.username, isAdmin: true }), {
+    return new Response(JSON.stringify({ username: webUser.username, isAdmin: true }), {
       status: 200,
       headers: { ...CORS, 'Content-Type': 'application/json', 'Set-Cookie': cookie(token, sessionTtl, { secure: isSecureRequest(request) }) },
     });

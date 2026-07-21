@@ -48,7 +48,7 @@ function getAdminEnv(env) {
 
 function assertValidEnvPassword(password) {
   if (password !== undefined && !validatePassword(password)) {
-    throw new BootstrapError('ADMIN_PASSWORD 长度不足 6 位，拒绝初始化以避免弱口令被使用')
+    throw new BootstrapError('ADMIN_PASSWORD 不符合策略（≥10 位，含字母与数字，非常见弱口令），拒绝初始化')
   }
 }
 
@@ -94,8 +94,9 @@ async function createBootstrapAdmin({ db, kv, env }) {
   const { username, password: envPassword, hasPassword } = getAdminEnv(env)
   assertValidEnvPassword(envPassword)
 
+  // 未配置 ADMIN_PASSWORD 时自动生成临时密码，并在日志中明文打印一次
   const password = hasPassword ? envPassword : genToken(20)
-  const user = await db.createWebUser(username, await hashPw(password))
+  const user = await db.createWebUser(username, await hashPw(password), { isAdmin: true })
   const record = await writeBootstrap(kv, {
     state: 'pending',
     defaultAdminId: user.id,
@@ -114,6 +115,7 @@ async function createBootstrapAdmin({ db, kv, env }) {
   } else {
     console.warn(`[SECURITY] 临时密码: ${password}`)
     console.warn('[SECURITY] 请立即登录后台完成首次注册，或修改密码。该账号会在真实注册后禁用。')
+    console.warn('[SECURITY] 也可使用运维 CLI：npm run admin -- reset-password <user> --yes')
   }
   console.warn('='.repeat(60))
 
@@ -236,7 +238,12 @@ async function disableBootstrapUser({ db, kv, userId }) {
   console.log(`[SECURITY] 初始管理员账号已禁用: ${user.username}`)
 }
 
-export async function registerInitialAdmin({ db, kv = db?.kv, username, password, bootstrapUserId }) {
+/**
+ * 首次正式管理员注册。
+ * pending 阶段允许公开注册（无需先登录初始管理员）；成功后关闭注册并禁用初始账号。
+ * 仍用 registrationInFlight 串行化，防止并发抢注。
+ */
+export async function registerInitialAdmin({ db, kv = db?.kv, username, password, bootstrapUserId = null }) {
   if (!kv) throw new BootstrapError('管理员初始化缺少 KV 绑定')
   const current = registrationInFlight.get(kv)
   if (current) return current
@@ -246,17 +253,23 @@ export async function registerInitialAdmin({ db, kv = db?.kv, username, password
     if (record.state !== 'pending') {
       throw new BootstrapError('首次注册已关闭，请重新登录', 403)
     }
-    if (!bootstrapUserId || record.defaultAdminId !== bootstrapUserId) {
-      throw new BootstrapError('只有初始管理员可以完成首次注册', 403)
+    // 若调用方带了 bootstrapUserId，仍校验一致性（兼容旧客户端/会话路径）
+    if (bootstrapUserId && record.defaultAdminId && bootstrapUserId !== record.defaultAdminId) {
+      throw new BootstrapError('初始管理员会话无效', 403)
     }
     if (!username || !validatePassword(password)) {
       throw new BootstrapError('注册信息无效', 400)
+    }
+    // 不允许占用初始管理员用户名（避免与待禁用账号冲突）
+    if (record.defaultAdminUsername
+      && String(username).toLowerCase() === String(record.defaultAdminUsername).toLowerCase()) {
+      throw new BootstrapError('用户名已被初始管理员占用，请换一个', 400)
     }
     if (await db.getWebUser(username)) {
       throw new BootstrapError('用户名已存在', 400)
     }
 
-    const user = await db.createWebUser(username, await hashPw(password))
+    const user = await db.createWebUser(username, await hashPw(password), { isAdmin: true })
     await finalizeInitialRegistrationInternal({ db, kv, registeredUserId: user.id })
     return user
   })()
@@ -309,12 +322,37 @@ async function finalizeInitialRegistrationInternal({ db, kv, registeredUserId = 
   return next
 }
 
+/**
+ * 初始管理员直接登录并采用该账号为正式管理员：
+ * 关闭首次注册入口，但不禁用当前登录账号。
+ */
+export async function adoptBootstrapAdmin({ db, kv = db?.kv, userId }) {
+  if (!kv || !userId) throw new BootstrapError('缺少 KV 或用户')
+  const record = await readBootstrap(kv).catch(() => null)
+  if (!record || record.state !== 'pending') {
+    return record || { state: 'closed', needsRegistration: false }
+  }
+  if (record.defaultAdminId && record.defaultAdminId !== userId) {
+    throw new BootstrapError('只有初始管理员可以完成此操作', 403)
+  }
+  // registeredUserId === defaultAdminId → finalize 不会禁用自己
+  return finalizeInitialRegistration({ db, kv, registeredUserId: userId })
+}
+
 export async function isBootstrapAdminDisabled({ kv, user }) {
   if (!user) return true
+  // 密码被标记禁用 → 一定不可登录
   if (String(user.password_hash || '').startsWith('!!disabled:')) return true
 
   const record = await readBootstrap(kv).catch(() => null)
-  if (record?.defaultAdminId && record.defaultAdminId === user.id && record.state !== 'pending') return true
+  if (record?.defaultAdminId && record.defaultAdminId === user.id && record.state !== 'pending') {
+    // 初始管理员通过登录 adopt 为自己：registrationUserId === 自身，应允许继续使用
+    if (record.registrationUserId && String(record.registrationUserId) === String(user.id)) {
+      return false
+    }
+    // 其他人完成首次注册后，初始账号应不可用（即便密码尚未写入 !!disabled:）
+    return true
+  }
 
   // 兼容旧行为：没有 v2/旧 marker 时，用户名 admin 视为已退役的临时账号。
   if (!record && String(user.username || '').toLowerCase() === 'admin') {

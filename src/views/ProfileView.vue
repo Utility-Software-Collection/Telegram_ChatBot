@@ -75,6 +75,14 @@
 
       <div v-if="totpEnabled && !totpSecret">
         <p class="badge badge-success mb-2">{{ t('profile.2fa.enabled') }}</p>
+        <div class="form-group">
+          <label>{{ t('profile.password.current') }}</label>
+          <input type="password" v-model="disablePw" autocomplete="current-password" />
+        </div>
+        <div class="form-group">
+          <label>{{ t('profile.2fa.disableTotp') }}</label>
+          <input v-model="disableTotp" maxlength="6" inputmode="numeric" autocomplete="one-time-code" :placeholder="t('auth.login.totp')" />
+        </div>
         <button class="btn-danger" @click="disable2FA" :disabled="totpLoading">
           <span v-if="totpLoading" class="spinner"></span>{{ t('profile.2fa.disable') }}
         </button>
@@ -101,6 +109,7 @@ const toast = useToast()
 const newUsername = ref(''), unameLoading = ref(false)
 const oldPw = ref(''), newPw = ref(''), pwLoading = ref(false)
 const totpEnabled = ref(false), totpSecret = ref(''), totpToken = ref('')
+const disablePw = ref(''), disableTotp = ref('')
 const totpLoading = ref(false)
 
 function flash(msg, ok = true) {
@@ -160,7 +169,8 @@ async function verify2FA() {
   if (!totpToken.value) return
   totpLoading.value = true
   try {
-    await api.post('/api/profile/2fa/verify', { token: totpToken.value, secret: totpSecret.value })
+    // secret 仅由服务端 pending 状态保管，客户端不再回传
+    await api.post('/api/profile/2fa/verify', { token: totpToken.value })
     totpEnabled.value = true
     totpSecret.value = ''
     totpToken.value = ''
@@ -173,6 +183,10 @@ async function verify2FA() {
 }
 
 async function disable2FA() {
+  if (!disablePw.value || !disableTotp.value) {
+    flash(t('profile.2fa.disableNeedReauth'), false)
+    return
+  }
   const ok = await dialog.confirm({
     title: t('profile.2fa.disable'),
     message: t('profile.2fa.disableConfirm'),
@@ -182,8 +196,14 @@ async function disable2FA() {
   if (!ok) return
   totpLoading.value = true
   try {
-    await api.post('/api/profile/2fa/setup', { enable: false })
+    await api.post('/api/profile/2fa/setup', {
+      enable: false,
+      password: disablePw.value,
+      totp: disableTotp.value,
+    })
     totpEnabled.value = false
+    disablePw.value = ''
+    disableTotp.value = ''
     flash(t('profile.flash.2faDisabled'))
   } catch (e) {
     flash(e.message, false)

@@ -168,8 +168,20 @@ export class LocalKV {
   }
 
   close() {
-    if (this._cleanupInterval) clearInterval(this._cleanupInterval)
-    if (this._db) this._db.close()
+    if (this._cleanupInterval) {
+      clearInterval(this._cleanupInterval)
+      this._cleanupInterval = null
+    }
+    if (this._db) {
+      try {
+        // WAL 下先 checkpoint，减少 close 阻塞
+        try { this._db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* noop */ }
+        this._db.close()
+      } catch (e) {
+        console.warn('[KV] close 失败:', e?.message || e)
+      }
+      this._db = null
+    }
     this._mem.clear()
   }
 }

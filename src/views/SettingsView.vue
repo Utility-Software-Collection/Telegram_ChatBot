@@ -514,18 +514,16 @@
                     <div class="form-hint mt-1">{{ t('settings.storage.sqlHint') }}</div>
                   </div>
                   <div class="sql-tools-actions">
-                    <select v-model="sqlExportMode" class="toolbar-select">
-                      <option value="plain">{{ t('settings.storage.sqlMode.plain') }}</option>
-                      <option value="base64">{{ t('settings.storage.sqlMode.base64') }}</option>
-                      <option value="aes">{{ t('settings.storage.sqlMode.aes') }}</option>
-                    </select>
                     <input
-                      v-if="sqlExportMode === 'aes'"
                       v-model="sqlExportPassword"
                       type="password"
                       :placeholder="t('settings.storage.sqlAesPassword')"
                       style="min-width:180px"
                     />
+                    <label class="sql-secrets-toggle text-sm" :title="t('settings.storage.sqlIncludeSecretsHint')">
+                      <input type="checkbox" v-model="sqlIncludeSecrets" />
+                      {{ t('settings.storage.sqlIncludeSecrets') }}
+                    </label>
                     <button class="btn-ghost btn-sm" :disabled="sqlBusy" @click="exportSql">
                       <span v-if="sqlExporting" class="spinner"></span>{{ sqlExporting ? '…' : t('settings.storage.sqlExport') }}
                     </button>
@@ -535,7 +533,7 @@
                     <input
                       ref="sqlFileInput"
                       type="file"
-                      accept=".sql,text/sql"
+                      accept=".db,.sql,application/octet-stream"
                       class="sql-file-input"
                       @change="handleSqlFileChange"
                     />
@@ -617,8 +615,8 @@ const dbInfo = ref({ active: 'kv', hasD1: false, hasHyperdrive: false }), dbSwit
 const clearingData = ref(false)
 const sqlExporting = ref(false), sqlImporting = ref(false), sqlMsg = ref(''), sqlOk = ref(true), sqlFileName = ref('')
 const sqlFileInput = ref(null)
-const sqlExportMode = ref('base64')
 const sqlExportPassword = ref('')
+const sqlIncludeSecrets = ref(false)
 const sqlImportPassword = ref('')
 const messageFilterType = ref('text')
 const messageFilterValue = ref('')
@@ -1039,11 +1037,6 @@ async function switchDb(target, sync = true) {
   }
 }
 
-function buildSqlFileName(active) {
-  const kind = String(active || dbInfo.value.active || 'kv').toUpperCase()
-  return `${kind}.sql`
-}
-
 function parseContentDispositionFileName(header) {
   const value = String(header || '')
   const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i)
@@ -1091,7 +1084,7 @@ async function exportSql() {
     if (token) headers.Authorization = `Bearer ${token}`
     if (locale) headers['X-Locale'] = locale
 
-    if (sqlExportMode.value === 'aes' && !sqlExportPassword.value) {
+    if (!sqlExportPassword.value) {
       throw new Error(t('settings.storage.sqlAesPasswordRequired'))
     }
 
@@ -1102,8 +1095,8 @@ async function exportSql() {
       headers,
       credentials: 'include',
       body: JSON.stringify({
-        mode: sqlExportMode.value,
-        password: sqlExportMode.value === 'aes' ? sqlExportPassword.value : '',
+        password: sqlExportPassword.value,
+        includeSecrets: !!sqlIncludeSecrets.value,
       }),
     })
 
@@ -1113,7 +1106,8 @@ async function exportSql() {
     }
 
     const blob = await response.blob()
-    const fileName = parseContentDispositionFileName(response.headers.get('Content-Disposition')) || buildSqlFileName(response.headers.get('X-Active-Db'))
+    const fileName = parseContentDispositionFileName(response.headers.get('Content-Disposition'))
+      || `${String(response.headers.get('X-Active-Db') || 'kv').toUpperCase()}_AES.db`
     downloadSqlFile(blob, fileName)
     sqlFileName.value = fileName
     sqlMsg.value = t('settings.storage.sqlExported', { name: fileName })
@@ -1128,9 +1122,30 @@ async function exportSql() {
   }
 }
 
+/** 将二进制文件转为 base64（不经 UTF-8 解码，避免乱码损坏） */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result || '')
+      const idx = result.indexOf(',')
+      resolve(idx >= 0 ? result.slice(idx + 1) : result)
+    }
+    reader.onerror = () => reject(reader.error || new Error('read failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
 async function handleSqlFileChange(event) {
   const file = event?.target?.files?.[0]
   if (!file) return
+
+  const isLegacySql = /\.sql$/i.test(file.name)
+  if (!isLegacySql && !sqlImportPassword.value) {
+    toast.error(t('settings.storage.sqlAesPasswordRequired'))
+    if (event?.target) event.target.value = ''
+    return
+  }
 
   const ok = await dialog.confirm({
     title: t('settings.storage.sqlImport'),
@@ -1148,7 +1163,8 @@ async function handleSqlFileChange(event) {
   sqlFileName.value = file.name
 
   try {
-    const sql = await file.text()
+    // 旧明文 .sql 直接文本；加密 .db 以 base64 上传，避免 JSON 损坏二进制
+    const sql = isLegacySql ? await file.text() : await fileToBase64(file)
     await api.post('/api/settings/sql/import', { sql, password: sqlImportPassword.value || '' }, { timeout: 5 * 60 * 1000 })
     await load(true)
     sqlMsg.value = t('settings.storage.sqlImported', { name: file.name })

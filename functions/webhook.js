@@ -2,6 +2,7 @@
 import { DB } from './_shared/db.js';
 import { ensureAdminInitializedOnce } from './_shared/admin-bootstrap.js';
 import { processUpdate } from './_shared/bot.js';
+import { timingSafeEqualStr } from './_shared/auth.js';
 import { createT, normalizeLocale } from '../shared/i18n.js';
 
 export async function onRequestPost(context) {
@@ -23,7 +24,7 @@ export async function onRequestPost(context) {
       console.error('Webhook secret not configured — rejecting request');
       return new Response(t('webhook.unauthorized'), { status: 503 });
     }
-    if (received !== secret) {
+    if (!timingSafeEqualStr(received, secret)) {
       console.error('Webhook secret mismatch');
       return new Response(t('webhook.unauthorized'), { status: 401 });
     }

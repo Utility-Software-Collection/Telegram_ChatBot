@@ -239,11 +239,16 @@ export class D1Store {
 
   // Web users
   async webUserCount() { const r = await this.first('SELECT COUNT(*) as cnt FROM web_users'); return r?.cnt || 0 }
-  async createWebUser(username, passwordHash) {
+  async createWebUser(username, passwordHash, opts = {}) {
     const id = `${Date.now()}_${Math.random().toString(36).substr(2, 8)}`
     const ts = new Date().toISOString()
-    await this.exec('INSERT INTO web_users(id,username,password_hash,totp_secret,totp_enabled,is_admin,created_at) VALUES(?,?,?,NULL,0,1,?)', id, username, passwordHash, ts)
+    const isAdmin = opts?.isAdmin === true || opts?.isAdmin === 1 || opts?.isAdmin === '1' ? 1 : 0
+    await this.exec('INSERT INTO web_users(id,username,password_hash,totp_secret,totp_enabled,is_admin,created_at) VALUES(?,?,?,NULL,0,?,?)', id, username, passwordHash, isAdmin, ts)
     return this.getWebUser(username)
+  }
+  async setWebUserAdmin(id, isAdmin) {
+    await this.exec('UPDATE web_users SET is_admin=? WHERE id=?', isAdmin ? 1 : 0, id)
+    return this.getWebUserById(id)
   }
   async getWebUser(username) { return this.first('SELECT * FROM web_users WHERE LOWER(username)=LOWER(?)', username) }
   async getWebUserById(id) { return this.first('SELECT * FROM web_users WHERE id=?', id) }
